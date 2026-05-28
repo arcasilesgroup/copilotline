@@ -16,12 +16,12 @@
     "@remotion/cli": "4.0.392",
     "@remotion/renderer": "4.0.392",
     "react": "19.0.0",
-    "react-dom": "19.0.0",
+    "react-dom": "19.2.6",
     "remotion": "4.0.392"
   },
   "devDependencies": {
     "@types/react": "19.0.1",
-    "@types/react-dom": "19.0.2",
+    "@types/react-dom": "19.2.3",
     "typescript": "5.7.2",
     "webpack": "^5.106.2"
   },
