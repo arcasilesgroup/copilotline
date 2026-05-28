@@ -1,0 +1,48 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      types:
+        patterns:
+          - "@types/*"
+      bun-stack:
+        patterns:
+          - "@types/bun"
+          - "@types/node"
+          - "typescript"
+
+  - package-ecosystem: "npm"
+    directory: "/docs/remotion"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docs"
+    commit-message:
+      prefix: "chore(demo)"
+      include: "scope"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(actions)"
+      include: "scope"

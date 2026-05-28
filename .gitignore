@@ -1,0 +1,17 @@
+node_modules
+dist
+.DS_Store
+coverage
+*.log
+*.tgz
+.env
+.env.*
+!.env.example
+.typecheck
+.copilotline-captures/
+*.status.json
+usage-cache.json
+usage-refresh.marker
+docs/remotion/node_modules/
+docs/remotion/out/
+docs/remotion/dist/

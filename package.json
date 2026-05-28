@@ -1,0 +1,59 @@
+{
+  "name": "@arcasilesgroup/copilotline",
+  "version": "0.1.0",
+  "description": "Cross-platform statusline companion for GitHub Copilot CLI",
+  "license": "MIT",
+  "author": "Arcasiles Group",
+  "type": "module",
+  "bin": {
+    "copilotline": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "bun build src/cli.ts --target=node --outfile=dist/cli.js --minify --banner='#!/usr/bin/env node'",
+    "build:binary": "bun build src/cli.ts --compile --outfile=dist/copilotline",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "audit": "bun audit",
+    "render": "bun src/cli.ts render",
+    "install:local": "bun src/cli.ts install",
+    "prepublishOnly": "bun test && bun run lint && bun run build"
+  },
+  "keywords": [
+    "copilot",
+    "copilot-cli",
+    "statusline",
+    "cli",
+    "terminal",
+    "developer-tools",
+    "arcasiles"
+  ],
+  "homepage": "https://github.com/arcasilesgroup/copilotline#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcasilesgroup/copilotline.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arcasilesgroup/copilotline/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  }
+}

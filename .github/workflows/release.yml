@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node (for npm publish)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify package.json version matches release tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $tag does not match package.json version $pkg"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: bun test
+
+      - name: Typecheck
+        run: bun run lint
+
+      - name: Build bundle
+        run: bun build src/cli.ts --target=node --outfile=dist/cli.js --minify --banner='#!/usr/bin/env node'
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  binaries:
+    name: Build binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: bun-darwin-arm64, asset: copilotline-darwin-arm64 }
+          - { os: macos-latest, target: bun-darwin-x64, asset: copilotline-darwin-x64 }
+          - { os: ubuntu-latest, target: bun-linux-x64, asset: copilotline-linux-x64 }
+          - { os: ubuntu-latest, target: bun-linux-arm64, asset: copilotline-linux-arm64 }
+          - { os: windows-latest, target: bun-windows-x64, asset: copilotline-windows-x64.exe }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build binary
+        run: bun build src/cli.ts --compile --target=${{ matrix.target }} --outfile=dist/${{ matrix.asset }}
+
+      - name: Compute SHA256 (Unix)
+        if: runner.os != 'Windows'
+        run: shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+        working-directory: dist
+
+      - name: Compute SHA256 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: dist
+        run: |
+          $h = Get-FileHash -Algorithm SHA256 ${{ matrix.asset }}
+          "$($h.Hash.ToLower())  ${{ matrix.asset }}" | Out-File -Encoding utf8 ${{ matrix.asset }}.sha256
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh release upload "${GITHUB_REF_NAME}" "dist/${{ matrix.asset }}" "dist/${{ matrix.asset }}.sha256" --clobber
