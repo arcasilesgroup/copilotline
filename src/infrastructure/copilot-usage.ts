@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { QuotaSnapshot } from "../domain/status-line.js";
 import { asRecord } from "./value-reader.js";
+import { parseQuotaSnapshot } from "./quota-snapshot.js";
 import {
   cacheAccountKey,
   displayAccount,
@@ -246,7 +247,7 @@ export function parseCopilotUsageResponse(data: unknown): QuotaSnapshot | null {
       continue;
     }
 
-    const quota = quotaFromSnapshot(snapshot, label, source, resetAt);
+    const quota = parseQuotaSnapshot(snapshot, label, source, resetAt);
     if (quota) {
       return quota;
     }
@@ -324,48 +325,6 @@ function withAccountMetadata(
     host: account?.host ?? quota.host,
     accountSource: account?.source ?? quota.accountSource,
     tokenSource,
-  };
-}
-
-function quotaFromSnapshot(
-  snapshot: Record<string, unknown>,
-  label: string,
-  source: string,
-  resetAt: string | null,
-): QuotaSnapshot | null {
-  const unlimited = readBoolean(snapshot["unlimited"]) ?? false;
-  const entitlement = readNumber(snapshot["entitlement"]);
-  const remaining = readNumber(snapshot["remaining"]);
-  const remainingPercent = clampPercent(readNumber(snapshot["percent_remaining"]));
-  const used = entitlement !== null && remaining !== null ? Math.max(0, entitlement - remaining) : null;
-  const usedPercent = unlimited
-    ? 0
-    : remainingPercent !== null
-      ? 100 - remainingPercent
-      : entitlement !== null && entitlement > 0 && used !== null
-        ? clampPercent((used / entitlement) * 100)
-        : null;
-
-  if (!unlimited && usedPercent === null && entitlement === null && remaining === null) {
-    return null;
-  }
-
-  return {
-    login: null,
-    host: null,
-    label,
-    usedPercent,
-    remainingPercent,
-    entitlement,
-    remaining,
-    used,
-    unlimited,
-    overageUsed: readNumber(snapshot["overage_count"]),
-    overagePermitted: readBoolean(snapshot["overage_permitted"]),
-    resetAt: readString(snapshot["reset_date"]) ?? resetAt,
-    source,
-    accountSource: null,
-    tokenSource: null,
   };
 }
 

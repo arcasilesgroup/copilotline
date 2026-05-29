@@ -8,6 +8,7 @@ import {
   pickString,
   pickUnknown,
 } from "../infrastructure/value-reader.js";
+import { parseQuotaSnapshot } from "../infrastructure/quota-snapshot.js";
 
 const RESET = "\x1b[0m";
 const CONTEXT_GLYPH = "✍️";
@@ -381,7 +382,7 @@ function quotaFromSnapshots(input: unknown): StatusSnapshot["quota"] | null {
       continue;
     }
 
-    const quota = quotaFromSnapshot(snapshot, label, snakeKey, resetAt);
+    const quota = parseQuotaSnapshot(snapshot, label, snakeKey, resetAt);
     if (quota && hasQuotaData(quota)) {
       return withPayloadAccount(quota, input);
     }
@@ -473,58 +474,6 @@ function accountHostFromInput(input: unknown): string | null {
     ["authentication", "host"],
     ["authentication", "hostname"],
   ) ?? null;
-}
-
-function quotaFromSnapshot(
-  snapshot: Record<string, unknown>,
-  label: string,
-  source: string,
-  resetAt: string | null,
-): StatusSnapshot["quota"] | null {
-  const entitlement = readNumberValue(snapshot["entitlement"]);
-  const unlimited = readBoolean(snapshot["unlimited"]) ?? entitlement === -1;
-  const remaining =
-    readNumberValue(snapshot["remaining"]) ??
-    readNumberValue(snapshot["quota_remaining"]) ??
-    readNumberValue(snapshot["quotaRemaining"]);
-  const remainingPercent =
-    clampPercent(
-      readNumberValue(snapshot["percent_remaining"]) ??
-      readNumberValue(snapshot["percentRemaining"]),
-    ) ?? null;
-  const used = computeUsedQuota(entitlement, remaining);
-  const usedPercent = unlimited
-    ? 0
-    : invertPercent(remainingPercent) ??
-      (entitlement !== null && entitlement > 0 && used !== null
-        ? clampPercent((used / entitlement) * 100) ?? null
-        : null);
-
-  return {
-    login: null,
-    host: null,
-    label,
-    usedPercent,
-    remainingPercent,
-    entitlement,
-    remaining,
-    used,
-    unlimited,
-    overageUsed:
-      readNumberValue(snapshot["overage_count"]) ??
-      readNumberValue(snapshot["overageCount"]),
-    overagePermitted:
-      readBoolean(snapshot["overage_permitted"]) ??
-      readBoolean(snapshot["overagePermitted"]),
-    resetAt:
-      readString(snapshot["reset_date"]) ??
-      readString(snapshot["resetDate"]) ??
-      readString(snapshot["quota_reset_date"]) ??
-      resetAt,
-    source,
-    accountSource: null,
-    tokenSource: null,
-  };
 }
 
 function quotaFromHeaderValue(value: string, label: string, source: string): StatusSnapshot["quota"] | null {
@@ -825,7 +774,7 @@ function formatCompactDecimal(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
 }
 
-function formatReset(resetAt: string | null): string | null {
+export function formatReset(resetAt: string | null): string | null {
   if (!resetAt) {
     return null;
   }
@@ -836,11 +785,11 @@ function formatReset(resetAt: string | null): string | null {
   }
 
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const month = months[date.getMonth()] ?? "";
-  const day = date.getDate();
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${style.dim}⟳${RESET} ${palette.white}${month} ${day} ${hour}:${minute}${RESET}`;
+  const month = months[date.getUTCMonth()] ?? "";
+  const day = date.getUTCDate();
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${style.dim}⟳${RESET} ${palette.white}${month} ${day} ${hour}:${minute} UTC${RESET}`;
 }
 
 function formatOverage(overageUsed: number | null, overagePermitted: boolean | null): string | null {

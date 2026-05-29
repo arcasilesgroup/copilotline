@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -47,13 +46,13 @@ import {
 import { getGitInfo } from "./infrastructure/git-info.js";
 import { printDoctorReport } from "./presentation/doctor-report.js";
 import { VERSION } from "./version.js";
+import { readFlagValue } from "./cli-args.js";
 
 const HELP = `copilotline ${VERSION} - statusline companion for GitHub Copilot CLI
 
 Usage:
   copilotline render                      Read Copilot status JSON from stdin and emit a status line
   copilotline render --json               Emit normalized JSON instead of text
-  copilotline render --capture <path>     Save the raw stdin payload for schema discovery
   copilotline refresh                     Fetch and cache Copilot usage from GitHub
   copilotline refresh --json              Emit cached usage as JSON after refresh
   copilotline account                     Configure the Copilot account interactively
@@ -128,12 +127,7 @@ async function main(): Promise<number> {
 
 async function runRender(args: string[]): Promise<number> {
   const asJson = args.includes("--json");
-  const capturePath = readFlagValue(args, "--capture");
   const stdin = await readStandardInput();
-
-  if (capturePath && !stdin.truncated) {
-    writeFileSync(capturePath, stdin.raw, "utf-8");
-  }
 
   const parsed = safeParse(stdin.raw);
   // Resolve the account once for the whole render; thread it into the
@@ -697,15 +691,6 @@ async function readStandardInput(
   }
 
   return { raw: Buffer.concat(chunks).toString("utf-8"), truncated: false };
-}
-
-function readFlagValue(args: string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-
-  return args[index + 1];
 }
 
 try {

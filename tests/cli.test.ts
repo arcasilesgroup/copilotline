@@ -93,20 +93,6 @@ describe("cli", () => {
     expect(parsed.data.context.usedPercent).toBe(12);
   });
 
-  test("render --capture persists the raw payload", () => {
-    const tempDir = createTempDir();
-    const capturePath = join(tempDir, "status.json");
-
-    try {
-      const payload = '{"model":{"displayName":"GPT-5.4"}}';
-      const result = run(["render", "--capture", capturePath], { stdin: payload });
-      expect(result.status).toBe(0);
-      expect(readFileSync(capturePath, "utf-8")).toBe(payload);
-    } finally {
-      cleanupTempDir(tempDir);
-    }
-  });
-
   test("install and uninstall mutate COPILOT_HOME settings.json", () => {
     const tempDir = createTempDir();
 
