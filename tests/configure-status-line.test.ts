@@ -25,7 +25,7 @@ describe("configure statusLine", () => {
     expect(parsed.footer?.showCustom).toBe(true);
   });
 
-  test("accepts JSONC comments and keeps unrelated settings", () => {
+  test("preserves JSONC comments when installing", () => {
     const updated = applySettingsMutations(
      `{
   // keep me
@@ -38,10 +38,36 @@ describe("configure statusLine", () => {
       }),
     );
 
+    // The user's comment must survive the write — not just the setting value.
+    expect(updated).toContain("// keep me");
+
     const parsed = parseSettings(updated);
     expect(parsed["theme"]).toBe("dark");
     expect(parsed.statusLine?.padding).toBe(2);
     expect(parsed.footer?.showCustom).toBe(true);
+  });
+
+  test("preserves comments across an install + uninstall round-trip", () => {
+    const source = `{
+  // important config note
+  "theme": "dark",
+  "editor": { "fontSize": 14 } // trailing note
+}
+`;
+
+    const installed = applySettingsMutations(
+      source,
+      installStatusLineMutations({ command: "copilotline", padding: 1 }),
+    );
+    const removed = applySettingsMutations(installed, uninstallStatusLineMutations());
+
+    expect(removed).toContain("// important config note");
+    expect(removed).toContain("// trailing note");
+
+    const parsed = parseSettings(removed);
+    expect(parsed["theme"]).toBe("dark");
+    expect((parsed["editor"] as { fontSize?: number }).fontSize).toBe(14);
+    expect(parsed.statusLine).toBeUndefined();
   });
 
   test("removes statusLine without touching other settings", () => {

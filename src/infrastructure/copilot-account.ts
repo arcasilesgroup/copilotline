@@ -3,6 +3,7 @@ import { homedir, platform } from "node:os";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { defaultCopilotHome, parseSettings } from "./copilot-settings-file.js";
+import { normalizeHost, usageApiBaseForHost } from "./host-policy.js";
 import {
   defaultCopilotlineConfig,
   readCopilotlineConfig,
@@ -39,8 +40,18 @@ export interface TokenResolutionStatus {
   error: string | null;
 }
 
+/**
+ * Structural shape of `fetch` the tool depends on. Decoupled from the
+ * runtime's concrete `typeof fetch` (Bun's includes a static `preconnect`),
+ * so test doubles only need to satisfy the call signature.
+ */
+export type FetchImpl = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface ResolveTokenOptions {
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImpl;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }
@@ -279,14 +290,7 @@ export function accountFromGitHubCli(): AccountIdentity | null {
   return null;
 }
 
-export function normalizeHost(host: string): string {
-  return host.replace(/^https?:\/\//, "").replace(/\/$/, "") || "github.com";
-}
-
-export function usageApiBaseForHost(host: string): string {
-  const normalized = normalizeHost(host);
-  return normalized === "github.com" ? "https://api.github.com" : `https://api.${normalized}`;
-}
+export { normalizeHost, usageApiBaseForHost };
 
 export function sameLogin(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();

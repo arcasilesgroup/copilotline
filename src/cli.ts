@@ -10,14 +10,18 @@ import {
 import {
   installStatusLineMutations,
   uninstallStatusLineMutations,
+  type SettingsMutation,
 } from "./application/configure-status-line.js";
 import { runDoctor } from "./application/run-doctor.js";
 import {
   applySettingsMutations,
+  backupSettingsFile,
   defaultCopilotHome,
   defaultSettingsPath,
   parseSettings,
   readSettingsText,
+  rewriteSettings,
+  SettingsEditConflict,
   writeSettingsText,
 } from "./infrastructure/copilot-settings-file.js";
 import { isCommandAvailable } from "./infrastructure/command-tools.js";
@@ -160,9 +164,30 @@ async function runRender(args: string[]): Promise<number> {
   return 0;
 }
 
+function applySettingsOrFallback(
+  settingsPath: string,
+  existing: string | undefined,
+  mutations: readonly SettingsMutation[],
+): string {
+  try {
+    return applySettingsMutations(existing, mutations);
+  } catch (error) {
+    if (!(error instanceof SettingsEditConflict)) {
+      throw error;
+    }
+    const backup = backupSettingsFile(settingsPath);
+    process.stderr.write(
+      `copilotline: could not edit ${settingsPath} in place (${error.message}); ` +
+        `${backup ? `backed up to ${backup} and ` : ""}rewrote it without comments.\n`,
+    );
+    return rewriteSettings(existing, mutations);
+  }
+}
+
 async function runInstall(args: string[]): Promise<number> {
   const settingsPath = defaultSettingsPath();
-  const next = applySettingsMutations(
+  const next = applySettingsOrFallback(
+    settingsPath,
     readSettingsText(settingsPath),
     installStatusLineMutations({
       command: statusLineCommand(),
@@ -187,10 +212,7 @@ function runUninstall(): number {
     return 0;
   }
 
-  const next = applySettingsMutations(
-    existing,
-    uninstallStatusLineMutations(),
-  );
+  const next = applySettingsOrFallback(settingsPath, existing, uninstallStatusLineMutations());
   writeSettingsText(settingsPath, next);
   process.stdout.write(`copilotline removed from ${settingsPath}\n`);
   return 0;
