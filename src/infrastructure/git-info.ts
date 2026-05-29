@@ -1,5 +1,6 @@
+import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export interface GitInfo {
   branch: string | null;
@@ -28,12 +29,43 @@ export function getGitInfo(cwd: string): GitInfo {
     return { branch: null, dirty: false, worktree: false };
   }
 
-  const gitDir = runGit(cwd, ["--no-optional-locks", "rev-parse", "--git-dir"]);
-
   return {
     ...parseGitStatus(statusOutput),
-    worktree: gitDir !== null && isWorktreeGitDir(gitDir),
+    worktree: detectWorktree(cwd),
   };
+}
+
+// Detect a linked worktree without a second git spawn. A linked worktree's
+// `.git` is a file ("gitdir: <path>") pointing under `.git/worktrees/`, while
+// a main working tree's `.git` is a directory and a submodule's points under
+// `.git/modules/`. Best-effort under the single-spawn constraint.
+function detectWorktree(cwd: string): boolean {
+  let dir = cwd;
+  for (;;) {
+    const dotGit = join(dir, ".git");
+    let stats;
+    try {
+      stats = statSync(dotGit);
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) {
+        return false;
+      }
+      dir = parent;
+      continue;
+    }
+
+    if (!stats.isFile()) {
+      return false;
+    }
+
+    try {
+      const match = readFileSync(dotGit, "utf-8").trim().match(/^gitdir:\s*(.+)$/);
+      return match?.[1] ? isWorktreeGitDir(match[1]) : false;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export function parseGitStatus(stdout: string): Pick<GitInfo, "branch" | "dirty"> {

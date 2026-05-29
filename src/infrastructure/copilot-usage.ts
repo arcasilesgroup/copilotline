@@ -11,6 +11,7 @@ import {
   selectCopilotAccount,
   usageApiBaseForHost,
   type AccountIdentity,
+  type ResolveTokenOptions,
   type TokenResolution,
 } from "./copilot-account.js";
 
@@ -179,32 +180,35 @@ export async function refreshCopilotUsageCache(
   return cache;
 }
 
-export function quotaForRender(input?: unknown, now: () => number = Date.now): QuotaSnapshot | null {
+export function quotaForRender(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): QuotaSnapshot | null {
   if (!copilotUsageEnabled()) {
     return null;
   }
 
-  const account = selectCopilotAccount(input).selected;
   return readCachedCopilotUsage(account, now)?.cache.quota ?? null;
 }
 
-export function shouldRefreshUsageCache(input?: unknown, now: () => number = Date.now): boolean {
+export function shouldRefreshUsageCache(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): boolean {
   if (!copilotUsageEnabled()) {
     return false;
   }
 
-  const account = selectCopilotAccount(input).selected;
   const cached = readCachedCopilotUsage(account, now);
   return cached === null || cached.ageMs >= CACHE_TTL_MS;
 }
 
 export function refreshCopilotUsageInBackground(
   commandPath: string,
-  input?: unknown,
+  account: AccountIdentity | null,
   now: () => number = Date.now,
 ): void {
-  const account = selectCopilotAccount(input).selected;
-  if (!shouldRefreshUsageCache(input, now) || refreshRecentlyStarted(account, now)) {
+  if (!shouldRefreshUsageCache(account, now) || refreshRecentlyStarted(account, now)) {
     return;
   }
 
@@ -299,10 +303,14 @@ async function tokenForRefresh(
     return null;
   }
 
-  return await resolveTokenForAccount(account, {
-    fetchImpl: options.fetchImpl,
-    timeoutMs: options.timeoutMs,
-  });
+  const tokenOptions: ResolveTokenOptions = {};
+  if (options.fetchImpl !== undefined) {
+    tokenOptions.fetchImpl = options.fetchImpl;
+  }
+  if (options.timeoutMs !== undefined) {
+    tokenOptions.timeoutMs = options.timeoutMs;
+  }
+  return await resolveTokenForAccount(account, tokenOptions);
 }
 
 function withAccountMetadata(

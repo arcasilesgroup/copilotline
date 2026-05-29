@@ -136,8 +136,12 @@ async function runRender(args: string[]): Promise<number> {
   }
 
   const parsed = safeParse(stdin.raw);
-  const usage = quotaForRender(parsed);
-  refreshCopilotUsageInBackground(statusLineCommand(), parsed);
+  // Resolve the account once for the whole render; thread it into the
+  // cache-only readers so the render path never re-detects (no gh/sqlite3
+  // foreground spawns).
+  const account = selectCopilotAccount(parsed).selected;
+  const usage = quotaForRender(account);
+  refreshCopilotUsageInBackground(statusLineCommand(), account);
   const snapshot = buildStatusSnapshot(parsed, {
     now: () => Date.now(),
     getGitInfo,
