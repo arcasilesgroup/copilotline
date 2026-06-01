@@ -33,6 +33,24 @@ artifact_feeds:
 # custom fields, hierarchy, etc.).
 work_items:
   provider: github # 'github' or 'azure_devops'
+  state_mapping:
+    refinement: Refinement
+    ready: Ready
+    in_progress: In Progress
+    in_review: In Review
+    done: Done
+  github_project:
+    owner: arcasilesgroup
+    number: 6
+    title: copilotline
+    id: PVT_kwDOC-uI1c4BZY4Y
+    status_field_id: PVTSSF_lADOC-uI1c4BZY4YzhUX2Ws
+    status_options:
+      refinement: "17e42d18"
+      ready: "4af78908"
+      in_progress: "e0770628"
+      in_review: "20416d18"
+      done: "0b300cd2"
 
 # Quality gates
 quality:
