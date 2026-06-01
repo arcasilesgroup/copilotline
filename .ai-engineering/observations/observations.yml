@@ -1,5 +1,7 @@
-schemaVersion: '2.0'
-updatedAt: '2026-05-28T19:18:41Z'
-corrections: []
-recoveries: []
-workflows: []
+{
+  "schemaVersion": "2.0",
+  "updatedAt": "2026-06-01T12:36:05Z",
+  "corrections": [],
+  "recoveries": [],
+  "workflows": []
+}
