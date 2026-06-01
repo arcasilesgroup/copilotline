@@ -93,12 +93,18 @@ export function parseQuotaSnapshot(
   resetAt: string | null,
 ): QuotaSnapshot | null {
   const unit = deriveQuotaUnit(snapshot);
-  const entitlement = readNumberAlias(snapshot, ENTITLEMENT_KEYS);
+  const rawEntitlement = readNumberAlias(snapshot, ENTITLEMENT_KEYS);
   // D-002-10: only the legacy request unit treats entitlement === -1 as unlimited;
   // a credit/token count of -1 is not a sentinel.
   const unlimited =
     readBoolean(snapshot["unlimited"]) ??
-    (unit === "request" && entitlement === -1);
+    (unit === "request" && rawEntitlement === -1);
+  // A negative allowance is a sentinel, never a real denominator: for the request
+  // unit it means unlimited (handled above); for credit/token there is simply no
+  // allowance to show, so the used-only clause (D-002-12) takes over instead of
+  // rendering a nonsensical "/-1".
+  const entitlement =
+    rawEntitlement !== null && rawEntitlement < 0 ? null : rawEntitlement;
   const remaining = readNumberAlias(snapshot, REMAINING_KEYS);
   const remainingPercent = clampPercent(
     readNumberAlias(snapshot, PERCENT_REMAINING_KEYS),

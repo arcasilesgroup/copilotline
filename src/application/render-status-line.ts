@@ -323,18 +323,45 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
         ["quotaWindow", "percentRemaining"],
       ),
     ) ?? null;
-  const entitlement =
+  // Read counts through the credit/token aliases too (not only the bare
+  // `entitlement`/`remaining`/`used`), so a flat stdin `quota` object expressed
+  // in token-billing field names is not silently dropped.
+  const rawEntitlement =
     pickNumber(
       input,
       ["quota", "entitlement"],
+      ["quota", "credit_entitlement"],
+      ["quota", "creditEntitlement"],
+      ["quota", "token_entitlement"],
+      ["quota", "tokenEntitlement"],
+      ["quota", "allowance"],
+      ["quota", "credit_allowance"],
       ["quota_window", "entitlement"],
     ) ?? null;
+  // A negative allowance is a sentinel, not a denominator (mirrors the snapshot
+  // parser); fall through to the used-only clause instead of rendering "/-1".
+  const entitlement =
+    rawEntitlement !== null && rawEntitlement < 0 ? null : rawEntitlement;
   const remaining =
-    pickNumber(input, ["quota", "remaining"], ["quota_window", "remaining"]) ??
-    null;
+    pickNumber(
+      input,
+      ["quota", "remaining"],
+      ["quota", "credits_remaining"],
+      ["quota", "creditsRemaining"],
+      ["quota", "tokens_remaining"],
+      ["quota", "tokensRemaining"],
+      ["quota_window", "remaining"],
+    ) ?? null;
   const used =
-    pickNumber(input, ["quota", "used"], ["quota_window", "used"]) ??
-    computeUsedQuota(entitlement, remaining);
+    pickNumber(
+      input,
+      ["quota", "used"],
+      ["quota", "credits_used"],
+      ["quota", "creditsUsed"],
+      ["quota", "tokens_used"],
+      ["quota", "tokensUsed"],
+      ["quota_window", "used"],
+    ) ?? computeUsedQuota(entitlement, remaining);
   const usedPercentFromCounts =
     entitlement !== null && entitlement > 0 && used !== null
       ? (clampPercent((used / entitlement) * 100) ?? null)
@@ -740,6 +767,7 @@ function quotaSegment(
       `${palette.white}${label}${RESET}`,
       `${palette.white}${formatUsd(cost)}${RESET}`,
       formatReset(quota.resetAt),
+      formatOverage(quota.overageUsed, quota.overagePermitted),
     ].filter((part): part is string => Boolean(part));
     return `💸 ${parts.join(" ")}`;
   }

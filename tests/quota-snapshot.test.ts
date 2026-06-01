@@ -111,6 +111,11 @@ describe("token/credit billing semantics (spec-002)", () => {
       null,
     );
     expect(quota?.unlimited).toBe(false);
+    // a negative allowance is a sentinel, not a denominator: drop it so the
+    // used-only clause renders instead of "/-1"
+    expect(quota?.entitlement).toBeNull();
+    expect(quota?.used).toBe(50);
+    expect(quota?.usedPercent).toBeNull();
   });
 
   test("returns null only when nothing usable is present", () => {

@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { parseCopilotUsageResponse } from "../src/infrastructure/copilot-usage.js";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import {
+  parseCopilotUsageResponse,
+  readCachedCopilotUsage,
+  usageCachePath,
+} from "../src/infrastructure/copilot-usage.js";
+import { cleanupTempDir, createTempDir } from "./helpers.js";
 
 describe("copilot usage", () => {
   test("prefers the current premium_models quota snapshot", () => {
@@ -80,5 +87,48 @@ describe("copilot usage", () => {
         quota_snapshots: { weird_key: { nothing: true } },
       }),
     ).toBeNull();
+  });
+});
+
+describe("usage cache migration (spec-002 D-002-01)", () => {
+  let tmp: string | null = null;
+  const prevCacheDir = process.env["COPILOTLINE_CACHE_DIR"];
+
+  afterEach(() => {
+    if (tmp) cleanupTempDir(tmp);
+    tmp = null;
+    if (prevCacheDir === undefined) delete process.env["COPILOTLINE_CACHE_DIR"];
+    else process.env["COPILOTLINE_CACHE_DIR"] = prevCacheDir;
+  });
+
+  test("a pre-migration cache entry without `unit` deserializes as request", () => {
+    tmp = createTempDir();
+    process.env["COPILOTLINE_CACHE_DIR"] = tmp;
+    const account = {
+      login: "octocat",
+      host: "github.com",
+      source: "manual" as const,
+    };
+    const path = usageCachePath(account);
+    mkdirSync(dirname(path), { recursive: true });
+    // Shape written by an older build: a quota object with NO `unit` field.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        fetchedAt: new Date().toISOString(),
+        account,
+        tokenSource: null,
+        quota: {
+          label: "premium",
+          entitlement: 1000,
+          remaining: 900,
+          usedPercent: 10,
+        },
+      }),
+      "utf-8",
+    );
+
+    const cached = readCachedCopilotUsage(account);
+    expect(cached?.cache.quota.unit).toBe("request");
   });
 });

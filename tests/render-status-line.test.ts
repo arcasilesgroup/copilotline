@@ -282,6 +282,16 @@ describe("renderStatusLine token/credit billing (spec-002)", () => {
     const line = renderStatusLine({ cwd: "/x", quota: {} }, deps);
     expect(stripAnsi(line)).not.toContain("💸");
   });
+
+  test("reads a flat stdin quota expressed in credit alias keys", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { credit_entitlement: 1500, credits_used: 105 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("105/1.5k");
+  });
 });
 
 describe("renderStatusLine usage units/cost config (spec-002 P4)", () => {
