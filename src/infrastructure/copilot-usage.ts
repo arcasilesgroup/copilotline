@@ -477,10 +477,6 @@ function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-function clampPercent(value: number | null): number | null {
-  return value === null ? null : Math.max(0, Math.min(100, value));
-}
-
 function cleanToken(token: string | undefined): string | null {
   const trimmed = token?.trim();
   return trimmed ? trimmed : null;

@@ -733,10 +733,6 @@ function readNumberValue(value: unknown): number | null {
   return null;
 }
 
-function readBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
 function computeUsedQuota(entitlement: number | null, remaining: number | null): number | null {
   if (entitlement === null || remaining === null) {
     return null;
