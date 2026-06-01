@@ -112,6 +112,26 @@ export function parseQuotaSnapshot(
   const used =
     readNumberAlias(snapshot, USED_KEYS) ??
     computeUsedQuota(entitlement, remaining);
+
+  // D-002-13: a unit the account holds no allowance for (free-tier
+  // `premium_interactions`: `has_quota: false` with a zero entitlement and
+  // nothing used/remaining) is NOT "100% consumed" — there is simply no quota of
+  // this unit. GitHub still reports `percent_remaining: 0` for it, which would
+  // otherwise invert to a misleading 100% bar. Discard so candidate selection
+  // falls through to a unit the account actually holds. This intentionally does
+  // NOT match chat/completions, which carry a real (non-zero) entitlement even
+  // when `has_quota` is false.
+  const hasQuota = readBoolean(snapshot["has_quota"]);
+  const holdsNoAllowance =
+    hasQuota === false &&
+    !unlimited &&
+    (entitlement === null || entitlement === 0) &&
+    (remaining === null || remaining === 0) &&
+    (used === null || used === 0);
+  if (holdsNoAllowance) {
+    return null;
+  }
+
   const usedPercent = unlimited
     ? 0
     : (invertPercent(remainingPercent) ??
