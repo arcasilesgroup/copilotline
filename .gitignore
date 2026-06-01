@@ -15,3 +15,7 @@ usage-refresh.marker
 docs/remotion/node_modules/
 docs/remotion/out/
 docs/remotion/dist/
+
+# Python bytecode (ai-engineering toolkit)
+__pycache__/
+*.pyc
