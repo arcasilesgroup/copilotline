@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -10,14 +9,18 @@ import {
 import {
   installStatusLineMutations,
   uninstallStatusLineMutations,
+  type SettingsMutation,
 } from "./application/configure-status-line.js";
 import { runDoctor } from "./application/run-doctor.js";
 import {
   applySettingsMutations,
+  backupSettingsFile,
   defaultCopilotHome,
   defaultSettingsPath,
   parseSettings,
   readSettingsText,
+  rewriteSettings,
+  SettingsEditConflict,
   writeSettingsText,
 } from "./infrastructure/copilot-settings-file.js";
 import { isCommandAvailable } from "./infrastructure/command-tools.js";
@@ -43,13 +46,13 @@ import {
 import { getGitInfo } from "./infrastructure/git-info.js";
 import { printDoctorReport } from "./presentation/doctor-report.js";
 import { VERSION } from "./version.js";
+import { readFlagValue } from "./cli-args.js";
 
 const HELP = `copilotline ${VERSION} - statusline companion for GitHub Copilot CLI
 
 Usage:
   copilotline render                      Read Copilot status JSON from stdin and emit a status line
   copilotline render --json               Emit normalized JSON instead of text
-  copilotline render --capture <path>     Save the raw stdin payload for schema discovery
   copilotline refresh                     Fetch and cache Copilot usage from GitHub
   copilotline refresh --json              Emit cached usage as JSON after refresh
   copilotline account                     Configure the Copilot account interactively
@@ -124,16 +127,15 @@ async function main(): Promise<number> {
 
 async function runRender(args: string[]): Promise<number> {
   const asJson = args.includes("--json");
-  const capturePath = readFlagValue(args, "--capture");
   const stdin = await readStandardInput();
 
-  if (capturePath && !stdin.truncated) {
-    writeFileSync(capturePath, stdin.raw, "utf-8");
-  }
-
   const parsed = safeParse(stdin.raw);
-  const usage = quotaForRender(parsed);
-  refreshCopilotUsageInBackground(statusLineCommand(), parsed);
+  // Resolve the account once for the whole render; thread it into the
+  // cache-only readers so the render path never re-detects (no gh/sqlite3
+  // foreground spawns).
+  const account = selectCopilotAccount(parsed).selected;
+  const usage = quotaForRender(account);
+  refreshCopilotUsageInBackground(statusLineCommand(), account);
   const snapshot = buildStatusSnapshot(parsed, {
     now: () => Date.now(),
     getGitInfo,
@@ -160,9 +162,30 @@ async function runRender(args: string[]): Promise<number> {
   return 0;
 }
 
+function applySettingsOrFallback(
+  settingsPath: string,
+  existing: string | undefined,
+  mutations: readonly SettingsMutation[],
+): string {
+  try {
+    return applySettingsMutations(existing, mutations);
+  } catch (error) {
+    if (!(error instanceof SettingsEditConflict)) {
+      throw error;
+    }
+    const backup = backupSettingsFile(settingsPath);
+    process.stderr.write(
+      `copilotline: could not edit ${settingsPath} in place (${error.message}); ` +
+        `${backup ? `backed up to ${backup} and ` : ""}rewrote it without comments.\n`,
+    );
+    return rewriteSettings(existing, mutations);
+  }
+}
+
 async function runInstall(args: string[]): Promise<number> {
   const settingsPath = defaultSettingsPath();
-  const next = applySettingsMutations(
+  const next = applySettingsOrFallback(
+    settingsPath,
     readSettingsText(settingsPath),
     installStatusLineMutations({
       command: statusLineCommand(),
@@ -183,11 +206,14 @@ function runUninstall(): number {
   const existing = readSettingsText(settingsPath);
 
   if (existing === undefined) {
-    process.stdout.write(`copilotline not installed. ${settingsPath} does not exist.\n`);
+    process.stdout.write(
+      `copilotline not installed. ${settingsPath} does not exist.\n`,
+    );
     return 0;
   }
 
-  const next = applySettingsMutations(
+  const next = applySettingsOrFallback(
+    settingsPath,
     existing,
     uninstallStatusLineMutations(),
   );
@@ -209,7 +235,11 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       const settings = parseSettings(settingsText);
       const statusLine = settings["statusLine"];
 
-      if (typeof statusLine === "object" && statusLine !== null && !Array.isArray(statusLine)) {
+      if (
+        typeof statusLine === "object" &&
+        statusLine !== null &&
+        !Array.isArray(statusLine)
+      ) {
         const command = (statusLine as { command?: unknown }).command;
         if (typeof command === "string" && command.trim() !== "") {
           statusLineCommandValue = command;
@@ -217,7 +247,11 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       }
 
       const footer = settings["footer"];
-      if (typeof footer === "object" && footer !== null && !Array.isArray(footer)) {
+      if (
+        typeof footer === "object" &&
+        footer !== null &&
+        !Array.isArray(footer)
+      ) {
         const showCustom = (footer as { showCustom?: unknown }).showCustom;
         if (typeof showCustom === "boolean") {
           customStatusVisible = showCustom;
@@ -238,7 +272,9 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       model: { displayName: "GPT-5.4" },
       cwd: process.cwd(),
       contextWindow: { usedPercent: 42 },
-      session: { startedAt: new Date(Date.now() - 65 * 60 * 1000).toISOString() },
+      session: {
+        startedAt: new Date(Date.now() - 65 * 60 * 1000).toISOString(),
+      },
       agent: { name: "task" },
       quota: {
         login: "copilot-user",
@@ -317,7 +353,9 @@ async function runRefreshCommand(args: string[]): Promise<number> {
     if (asJson) {
       process.stdout.write(`${JSON.stringify(cache, null, 2)}\n`);
     } else if (!quiet) {
-      process.stdout.write(`copilotline usage cache refreshed in ${usageCachePath(cache.account)}\n`);
+      process.stdout.write(
+        `copilotline usage cache refreshed in ${usageCachePath(cache.account)}\n`,
+      );
     }
     return 0;
   } catch (error) {
@@ -325,8 +363,13 @@ async function runRefreshCommand(args: string[]): Promise<number> {
       process.stdout.write(
         `${JSON.stringify(
           {
-            error: error instanceof Error ? error.message : "Failed to refresh Copilot usage",
-            cached: readCachedCopilotUsage(selectCopilotAccount().selected)?.cache ?? null,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Failed to refresh Copilot usage",
+            cached:
+              readCachedCopilotUsage(selectCopilotAccount().selected)?.cache ??
+              null,
           },
           null,
           2,
@@ -335,7 +378,9 @@ async function runRefreshCommand(args: string[]): Promise<number> {
     } else if (!quiet) {
       process.stderr.write(
         `copilotline refresh failed: ${
-          error instanceof Error ? error.message : "Failed to refresh Copilot usage"
+          error instanceof Error
+            ? error.message
+            : "Failed to refresh Copilot usage"
         }\n`,
       );
     }
@@ -436,7 +481,10 @@ async function enrichAccounts(
   return enriched;
 }
 
-function formatAccountList(selection: ReturnType<typeof selectCopilotAccount>, enriched: EnrichedAccount[]): string {
+function formatAccountList(
+  selection: ReturnType<typeof selectCopilotAccount>,
+  enriched: EnrichedAccount[],
+): string {
   const lines = [
     `mode: ${selection.mode}`,
     `system: ${displayAccount(selection.system)}`,
@@ -451,11 +499,15 @@ function formatAccountList(selection: ReturnType<typeof selectCopilotAccount>, e
       const marks = [
         account.selected ? "selected" : null,
         account.system ? "system" : null,
-      ].filter(Boolean).join(", ");
+      ]
+        .filter(Boolean)
+        .join(", ");
       const token = account.token.available
         ? `token: ${account.token.source}`
         : `token: missing`;
-      const cache = account.cache ? `cache: ${account.cache.fetchedAt}` : "cache: none";
+      const cache = account.cache
+        ? `cache: ${account.cache.fetchedAt}`
+        : "cache: none";
       lines.push(
         `${displayAccount(account)} (${sourceLabel(account.source)}${marks ? `, ${marks}` : ""}) - ${token}; ${cache}`,
       );
@@ -472,8 +524,12 @@ async function runInteractiveAccountSetup(
   printAccountHeader(selection);
 
   if (accounts.length === 0) {
-    process.stdout.write(`${style("No GitHub/Copilot accounts detected.", "yellow")}\n`);
-    process.stdout.write("Run `copilot login` or `gh auth login`, then run `copilotline account` again.\n");
+    process.stdout.write(
+      `${style("No GitHub/Copilot accounts detected.", "yellow")}\n`,
+    );
+    process.stdout.write(
+      "Run `copilot login` or `gh auth login`, then run `copilotline account` again.\n",
+    );
     return 1;
   }
 
@@ -484,7 +540,8 @@ async function runInteractiveAccountSetup(
       account: null,
       selected: selection.mode === "auto",
       tokenAvailable: selection.selected
-        ? accounts.find((account) => sameAccount(account, selection.selected))?.token.available ?? false
+        ? (accounts.find((account) => sameAccount(account, selection.selected))
+            ?.token.available ?? false)
         : false,
     },
     ...accounts.map((account) => ({
@@ -499,15 +556,23 @@ async function runInteractiveAccountSetup(
   process.stdout.write(`${style("Choose quota account", "cyan")}\n\n`);
   options.forEach((option, index) => {
     const marker = option.selected ? style("●", "green") : "○";
-    const token = option.tokenAvailable ? style("token ok", "green") : style("token missing", "yellow");
-    process.stdout.write(`  ${style(String(index + 1).padStart(2), "dim")}. ${marker} ${option.label} ${style("·", "dim")} ${token}\n`);
+    const token = option.tokenAvailable
+      ? style("token ok", "green")
+      : style("token missing", "yellow");
+    process.stdout.write(
+      `  ${style(String(index + 1).padStart(2), "dim")}. ${marker} ${option.label} ${style("·", "dim")} ${token}\n`,
+    );
   });
   process.stdout.write("\n");
 
-  const answer = await prompt(`Select [1-${options.length}] (Enter keeps current): `);
+  const answer = await prompt(
+    `Select [1-${options.length}] (Enter keeps current): `,
+  );
   const trimmed = answer.trim();
   if (trimmed === "") {
-    process.stdout.write(`${style("Keeping current account configuration.", "dim")}\n`);
+    process.stdout.write(
+      `${style("Keeping current account configuration.", "dim")}\n`,
+    );
     return 0;
   }
 
@@ -540,18 +605,26 @@ async function runInteractiveAccountSetup(
   return 0;
 }
 
-function printAccountHeader(selection: ReturnType<typeof selectCopilotAccount>): void {
+function printAccountHeader(
+  selection: ReturnType<typeof selectCopilotAccount>,
+): void {
   process.stdout.write(`${style("┌─ copilotline account", "cyan")}\n`);
   process.stdout.write(`${style("│", "cyan")} mode     ${selection.mode}\n`);
-  process.stdout.write(`${style("│", "cyan")} system   ${displayAccount(selection.system)}\n`);
-  process.stdout.write(`${style("│", "cyan")} selected ${displayAccount(selection.selected)}\n`);
+  process.stdout.write(
+    `${style("│", "cyan")} system   ${displayAccount(selection.system)}\n`,
+  );
+  process.stdout.write(
+    `${style("│", "cyan")} selected ${displayAccount(selection.selected)}\n`,
+  );
   process.stdout.write(`${style("└────────────────────", "cyan")}\n\n`);
 }
 
 async function runUseAliasCommand(args: string[]): Promise<number> {
   const login = args[0];
   if (!login) {
-    process.stderr.write("usage: copilotline account --auto | copilotline account --set <login>\n");
+    process.stderr.write(
+      "usage: copilotline account --auto | copilotline account --set <login>\n",
+    );
     return 2;
   }
 
@@ -567,14 +640,18 @@ function setAccountAuto(): void {
   writeCopilotlineConfig({
     account: { mode: "auto", login: null, host: null },
   });
-  process.stdout.write(`${style("✓", "green")} copilotline will follow the active Copilot account (${defaultCopilotlineConfigPath()})\n`);
+  process.stdout.write(
+    `${style("✓", "green")} copilotline will follow the active Copilot account (${defaultCopilotlineConfigPath()})\n`,
+  );
 }
 
 function setAccountManual(login: string, host: string): void {
   writeCopilotlineConfig({
     account: { mode: "manual", login, host },
   });
-  process.stdout.write(`${style("✓", "green")} copilotline pinned to ${login} (${defaultCopilotlineConfigPath()})\n`);
+  process.stdout.write(
+    `${style("✓", "green")} copilotline pinned to ${login} (${defaultCopilotlineConfigPath()})\n`,
+  );
 }
 
 function shouldPromptDuringInstall(args: string[]): boolean {
@@ -598,7 +675,10 @@ async function prompt(question: string): Promise<string> {
   }
 }
 
-function style(text: string, name: "cyan" | "green" | "yellow" | "dim"): string {
+function style(
+  text: string,
+  name: "cyan" | "green" | "yellow" | "dim",
+): string {
   if (process.env["NO_COLOR"] !== undefined || process.env["TERM"] === "dumb") {
     return text;
   }
@@ -613,7 +693,10 @@ function style(text: string, name: "cyan" | "green" | "yellow" | "dim"): string 
 }
 
 function statusLineCommand(): string {
-  return fileURLToPath(import.meta.url);
+  // Normalize to forward slashes so the path written into settings.json is
+  // cross-platform: Node accepts "/" on Windows, and it avoids backslash
+  // escaping in the JSON command string.
+  return fileURLToPath(import.meta.url).replaceAll("\\", "/");
 }
 
 function readCopilotVersion(): string | null {
@@ -632,7 +715,10 @@ function readCopilotVersion(): string | null {
   return match?.[1] ?? null;
 }
 
-function sameAccount(a: AccountIdentity | null, b: AccountIdentity | null): boolean {
+function sameAccount(
+  a: AccountIdentity | null,
+  b: AccountIdentity | null,
+): boolean {
   return Boolean(
     a &&
     b &&
@@ -671,15 +757,6 @@ async function readStandardInput(
   }
 
   return { raw: Buffer.concat(chunks).toString("utf-8"), truncated: false };
-}
-
-function readFlagValue(args: string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-
-  return args[index + 1];
 }
 
 try {

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { QuotaSnapshot } from "../domain/status-line.js";
 import { asRecord } from "./value-reader.js";
+import { parseQuotaSnapshot } from "./quota-snapshot.js";
 import {
   cacheAccountKey,
   displayAccount,
@@ -11,6 +12,7 @@ import {
   selectCopilotAccount,
   usageApiBaseForHost,
   type AccountIdentity,
+  type ResolveTokenOptions,
   type TokenResolution,
 } from "./copilot-account.js";
 
@@ -179,32 +181,35 @@ export async function refreshCopilotUsageCache(
   return cache;
 }
 
-export function quotaForRender(input?: unknown, now: () => number = Date.now): QuotaSnapshot | null {
+export function quotaForRender(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): QuotaSnapshot | null {
   if (!copilotUsageEnabled()) {
     return null;
   }
 
-  const account = selectCopilotAccount(input).selected;
   return readCachedCopilotUsage(account, now)?.cache.quota ?? null;
 }
 
-export function shouldRefreshUsageCache(input?: unknown, now: () => number = Date.now): boolean {
+export function shouldRefreshUsageCache(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): boolean {
   if (!copilotUsageEnabled()) {
     return false;
   }
 
-  const account = selectCopilotAccount(input).selected;
   const cached = readCachedCopilotUsage(account, now);
   return cached === null || cached.ageMs >= CACHE_TTL_MS;
 }
 
 export function refreshCopilotUsageInBackground(
   commandPath: string,
-  input?: unknown,
+  account: AccountIdentity | null,
   now: () => number = Date.now,
 ): void {
-  const account = selectCopilotAccount(input).selected;
-  if (!shouldRefreshUsageCache(input, now) || refreshRecentlyStarted(account, now)) {
+  if (!shouldRefreshUsageCache(account, now) || refreshRecentlyStarted(account, now)) {
     return;
   }
 
@@ -242,7 +247,7 @@ export function parseCopilotUsageResponse(data: unknown): QuotaSnapshot | null {
       continue;
     }
 
-    const quota = quotaFromSnapshot(snapshot, label, source, resetAt);
+    const quota = parseQuotaSnapshot(snapshot, label, source, resetAt);
     if (quota) {
       return quota;
     }
@@ -299,10 +304,14 @@ async function tokenForRefresh(
     return null;
   }
 
-  return await resolveTokenForAccount(account, {
-    fetchImpl: options.fetchImpl,
-    timeoutMs: options.timeoutMs,
-  });
+  const tokenOptions: ResolveTokenOptions = {};
+  if (options.fetchImpl !== undefined) {
+    tokenOptions.fetchImpl = options.fetchImpl;
+  }
+  if (options.timeoutMs !== undefined) {
+    tokenOptions.timeoutMs = options.timeoutMs;
+  }
+  return await resolveTokenForAccount(account, tokenOptions);
 }
 
 function withAccountMetadata(
@@ -316,48 +325,6 @@ function withAccountMetadata(
     host: account?.host ?? quota.host,
     accountSource: account?.source ?? quota.accountSource,
     tokenSource,
-  };
-}
-
-function quotaFromSnapshot(
-  snapshot: Record<string, unknown>,
-  label: string,
-  source: string,
-  resetAt: string | null,
-): QuotaSnapshot | null {
-  const unlimited = readBoolean(snapshot["unlimited"]) ?? false;
-  const entitlement = readNumber(snapshot["entitlement"]);
-  const remaining = readNumber(snapshot["remaining"]);
-  const remainingPercent = clampPercent(readNumber(snapshot["percent_remaining"]));
-  const used = entitlement !== null && remaining !== null ? Math.max(0, entitlement - remaining) : null;
-  const usedPercent = unlimited
-    ? 0
-    : remainingPercent !== null
-      ? 100 - remainingPercent
-      : entitlement !== null && entitlement > 0 && used !== null
-        ? clampPercent((used / entitlement) * 100)
-        : null;
-
-  if (!unlimited && usedPercent === null && entitlement === null && remaining === null) {
-    return null;
-  }
-
-  return {
-    login: null,
-    host: null,
-    label,
-    usedPercent,
-    remainingPercent,
-    entitlement,
-    remaining,
-    used,
-    unlimited,
-    overageUsed: readNumber(snapshot["overage_count"]),
-    overagePermitted: readBoolean(snapshot["overage_permitted"]),
-    resetAt: readString(snapshot["reset_date"]) ?? resetAt,
-    source,
-    accountSource: null,
-    tokenSource: null,
   };
 }
 
@@ -508,10 +475,6 @@ function readNumber(value: unknown): number | null {
 
 function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
-}
-
-function clampPercent(value: number | null): number | null {
-  return value === null ? null : Math.max(0, Math.min(100, value));
 }
 
 function cleanToken(token: string | undefined): string | null {

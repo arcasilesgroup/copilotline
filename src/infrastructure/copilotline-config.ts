@@ -23,7 +23,16 @@ export function readCopilotlineConfig(path: string = defaultCopilotlineConfigPat
     return defaultCopilotlineConfig();
   }
 
-  const record = asRecord(JSON.parse(readFileSync(path, "utf-8")) as unknown);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    // A malformed config must never crash the render path; fall back to
+    // defaults (auto account detection).
+    return defaultCopilotlineConfig();
+  }
+
+  const record = asRecord(parsed);
   const account = asRecord(record?.["account"]);
   const mode = account?.["mode"] === "manual" ? "manual" : "auto";
   const login = readString(account?.["login"]);
