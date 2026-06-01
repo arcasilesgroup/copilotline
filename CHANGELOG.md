@@ -13,8 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copilotline accounts` / `copilotline accounts --json` for account diagnostics.
 - `copilotline use auto|<login>` for account mode configuration.
 - Per-host/login quota cache metadata so one account's usage is never reused for another.
+- Token-based billing support: the quota parser recognizes GitHub AI-credit and token snapshots (by shape, not fixed field names) and the statusline shows `credits`/`tokens`, or a `used`-only reading when no allowance is reported.
+- `usage.units` config key (`credit` | `token` | `usd`, default `credit`) and `COPILOTLINE_USAGE_UNITS` environment override, plus `usage.showCost` for a secondary `≈ $x.xx` clause.
+- `copilotline doctor` reports which billing unit (credits/tokens/premium requests) the cached upstream response used, so a future GitHub shape change is observable.
 
 ### Changed
+
+- **Breaking:** the quota segment now describes GitHub's token-based AI-credit billing (effective 2026-06-01) instead of premium requests. `QuotaSnapshot` gains a required `unit` discriminator (`request` | `credit` | `token`) plus `costUsd` / `creditAllowanceSource`, applied in place with no compatibility shim. The displayed default unit is credits; a cache entry written by an older build (no `unit`) deserializes as `request`, so it keeps rendering as honest legacy data. The cached usage JSON schema changed shape; a stale cache that cannot be read simply triggers a fresh refresh.
 
 - Quota refresh now verifies tokens against the selected Copilot login and refuses wrong-account tokens instead of falling back silently.
 - Quota labels include the login when account metadata is available.

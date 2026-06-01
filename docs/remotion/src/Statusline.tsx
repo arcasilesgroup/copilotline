@@ -44,7 +44,9 @@ export const Statusline: React.FC = () => {
       easing: Easing.out(Easing.quad),
     }),
   );
-  const used = Math.round((quotaPct / 100) * 300);
+  // Token-based AI-credit billing: example monthly allowance of 1,500 credits.
+  const creditAllowance = 1500;
+  const used = Math.round((quotaPct / 100) * creditAllowance);
 
   return (
     <AbsoluteFill
@@ -70,20 +72,45 @@ export const Statusline: React.FC = () => {
           boxShadow: `0 0 0 1px ${COLORS.panelBorder}`,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", whiteSpace: "pre" }}>
-          <span style={{ color: COLORS.blue, ...modelStyle, display: "inline-block" }}>
+        <div
+          style={{ display: "flex", alignItems: "center", whiteSpace: "pre" }}
+        >
+          <span
+            style={{
+              color: COLORS.blue,
+              ...modelStyle,
+              display: "inline-block",
+            }}
+          >
             gpt-5.5 · xhigh
           </span>
 
-          <span style={{ ...contextStyle, display: "inline-flex", alignItems: "center" }}>
+          <span
+            style={{
+              ...contextStyle,
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
             <Separator />
             <span style={{ marginRight: 8 }}>✍️</span>
-            <span style={{ color: colorForPct(contextPct), fontVariantNumeric: "tabular-nums" }}>
+            <span
+              style={{
+                color: colorForPct(contextPct),
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
               {contextPct}%
             </span>
           </span>
 
-          <span style={{ ...dirStyle, display: "inline-flex", alignItems: "center" }}>
+          <span
+            style={{
+              ...dirStyle,
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
             <Separator />
             <span style={{ color: COLORS.cyan }}>copilotline</span>
             <span style={{ color: COLORS.green, marginLeft: 10 }}>
@@ -91,7 +118,13 @@ export const Statusline: React.FC = () => {
             </span>
           </span>
 
-          <span style={{ ...timeStyle, display: "inline-flex", alignItems: "center" }}>
+          <span
+            style={{
+              ...timeStyle,
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
             <Separator />
             <span style={{ color: COLORS.dim, marginRight: 8 }}>⏱</span>
             <span style={{ color: COLORS.white }}>2h27m</span>
@@ -108,7 +141,7 @@ export const Statusline: React.FC = () => {
           }}
         >
           <span>💸</span>
-          <span style={{ color: COLORS.white, marginLeft: 10 }}>premium</span>
+          <span style={{ color: COLORS.white, marginLeft: 10 }}>credits</span>
           <span style={{ marginLeft: 14 }}>
             <Bar pct={quotaPct} />
           </span>
@@ -121,11 +154,19 @@ export const Statusline: React.FC = () => {
           >
             {quotaPct}%
           </span>
-          <span style={{ color: COLORS.dim, marginLeft: 14, fontVariantNumeric: "tabular-nums" }}>
-            {used}/300
+          <span
+            style={{
+              color: COLORS.dim,
+              marginLeft: 14,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {(used / 1000).toFixed(1)}k/1.5k
           </span>
           <span style={{ color: COLORS.dim, marginLeft: 14 }}>⟳</span>
-          <span style={{ color: COLORS.white, marginLeft: 8 }}>Jun 1 02:00</span>
+          <span style={{ color: COLORS.white, marginLeft: 8 }}>
+            Jul 1 00:00
+          </span>
         </div>
       </div>
     </AbsoluteFill>

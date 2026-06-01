@@ -44,7 +44,7 @@ Its side effects are:
 - Reading GitHub tokens from login-scoped `COPILOTLINE_GITHUB_TOKEN_*`,
   `COPILOTLINE_GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
   `GITHUB_TOKEN`, or `gh auth token --user <login>` during `refresh`
-- Calling `https://api.github.com/copilot_internal/user` for best-effort quota metadata
+- Calling `https://api.github.com/copilot_internal/user` for best-effort usage/quota metadata (token-based AI credits or legacy premium requests)
 - Writing per-account quota cache JSON under the OS cache directory with
   owner-only permissions where supported
 - Spawning `git`, `gh`, `sqlite3`, and `copilot` with fixed argv arrays
