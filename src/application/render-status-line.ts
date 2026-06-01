@@ -206,47 +206,56 @@ export function formatStatusLine(
 }
 
 function normalizeContext(input: unknown): StatusSnapshot["context"] {
+  // Copilot CLI sends BOTH `current_context_used_percentage` (the real, UI-parity
+  // value that matches `/context`) AND `used_percentage` (a known-buggy field that
+  // mixes the full model window with last-call tokens — github/copilot-cli #1957).
+  // `pickNumber` returns the FIRST resolving path, so the correct display field
+  // MUST precede the legacy/buggy one; `used_percentage` stays only as a
+  // last-resort fallback for older CLIs that lack the display field.
   const usedPercent =
     clampPercent(
       pickNumber(
         input,
-        ["context_window", "used_percentage"],
-        ["context_window", "usedPercent"],
         ["context_window", "current_context_used_percentage"],
         ["context_window", "currentContextUsedPercentage"],
-        ["contextWindow", "used_percentage"],
-        ["contextWindow", "usedPercent"],
         ["contextWindow", "current_context_used_percentage"],
         ["contextWindow", "currentContextUsedPercentage"],
+        ["context", "current_context_used_percentage"],
+        ["context_window", "used_percentage"],
+        ["context_window", "usedPercent"],
+        ["contextWindow", "used_percentage"],
+        ["contextWindow", "usedPercent"],
         ["context", "used_percentage"],
         ["context", "usedPercent"],
       ),
     ) ?? null;
 
+  // Real "tokens currently in context" is `current_context_tokens`; prefer it
+  // over the generic aliases.
   const usedTokens =
     pickNumber(
       input,
-      ["context_window", "used_tokens"],
-      ["context_window", "usedTokens"],
       ["context_window", "current_context_tokens"],
       ["context_window", "currentContextTokens"],
-      ["contextWindow", "used_tokens"],
-      ["contextWindow", "usedTokens"],
       ["contextWindow", "current_context_tokens"],
       ["contextWindow", "currentContextTokens"],
+      ["context_window", "used_tokens"],
+      ["context_window", "usedTokens"],
+      ["contextWindow", "used_tokens"],
+      ["contextWindow", "usedTokens"],
       ["context", "used_tokens"],
       ["context", "usedTokens"],
     ) ?? null;
 
+  // Window CAPACITY is `displayed_context_limit` (practical limit) or
+  // `context_window_size` (raw model window). `total_tokens` is a CUMULATIVE
+  // session counter that exceeds the window, so it is NOT capacity — it stays
+  // last as a fallback only for payloads that expose nothing else.
   const totalTokens =
     pickNumber(
       input,
-      ["context_window", "total_tokens"],
-      ["context_window", "totalTokens"],
       ["context_window", "displayed_context_limit"],
       ["context_window", "displayedContextLimit"],
-      ["contextWindow", "total_tokens"],
-      ["contextWindow", "totalTokens"],
       ["contextWindow", "displayed_context_limit"],
       ["contextWindow", "displayedContextLimit"],
       ["context_window", "context_window_size"],
@@ -255,6 +264,10 @@ function normalizeContext(input: unknown): StatusSnapshot["context"] {
       ["context_window", "maxTokens"],
       ["contextWindow", "max_tokens"],
       ["contextWindow", "maxTokens"],
+      ["context_window", "total_tokens"],
+      ["context_window", "totalTokens"],
+      ["contextWindow", "total_tokens"],
+      ["contextWindow", "totalTokens"],
       ["context", "total_tokens"],
       ["context", "totalTokens"],
       ["context", "maxTokens"],

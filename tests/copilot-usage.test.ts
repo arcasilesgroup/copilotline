@@ -60,6 +60,51 @@ describe("copilot usage", () => {
     expect(parseCopilotUsageResponse({ quota_snapshots: {} })).toBeNull();
   });
 
+  test("skips a zero-entitlement premium snapshot on free accounts and falls through (D-002-13)", () => {
+    // Free-tier payload: premium_interactions carries no allowance
+    // (`has_quota: false`, entitlement 0, percent_remaining 0). It must NOT
+    // render as a misleading 100%-consumed bar; selection falls through to a
+    // unit the account actually holds.
+    const quota = parseCopilotUsageResponse({
+      quota_reset_date: "2026-07-01T00:00:00Z",
+      quota_snapshots: {
+        premium_interactions: {
+          entitlement: 0,
+          remaining: 0,
+          percent_remaining: 0,
+          has_quota: false,
+          unlimited: false,
+        },
+        chat: {
+          entitlement: 200,
+          remaining: 200,
+          percent_remaining: 100,
+          has_quota: false,
+        },
+      },
+    });
+
+    expect(quota?.source).toBe("chat");
+    expect(quota?.entitlement).toBe(200);
+    expect(quota?.usedPercent).toBe(0);
+  });
+
+  test("returns null when the only snapshot is a free-tier zero-allowance unit (D-002-13)", () => {
+    expect(
+      parseCopilotUsageResponse({
+        quota_snapshots: {
+          premium_interactions: {
+            entitlement: 0,
+            remaining: 0,
+            percent_remaining: 0,
+            has_quota: false,
+            unlimited: false,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   test("parses an unknown token/credit snapshot key and prefers it (D-002-05)", () => {
     const quota = parseCopilotUsageResponse({
       quota_reset_date: "2026-07-01T00:00:00Z",
