@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildStatusSnapshot, renderStatusLine } from "../src/application/render-status-line.js";
+import {
+  buildStatusSnapshot,
+  renderStatusLine,
+} from "../src/application/render-status-line.js";
 
 const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
 const fixedNow = () => new Date("2026-05-07T15:00:00Z").getTime();
@@ -41,7 +44,10 @@ describe("renderStatusLine", () => {
         workspace: { current_dir: "/tmp/example" },
         context_window: { used_tokens: 250, total_tokens: 1000 },
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     const plain = stripAnsi(line);
@@ -63,7 +69,10 @@ describe("renderStatusLine", () => {
         },
         cost: { total_duration_ms: 3_900_000 },
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     const plain = stripAnsi(line);
@@ -136,6 +145,10 @@ describe("renderStatusLine", () => {
           overagePermitted: null,
           resetAt: "2026-06-01",
           source: "cache",
+          login: "work-account",
+          host: "github.com",
+          accountSource: "cache",
+          tokenSource: null,
         },
       },
     );
@@ -152,7 +165,8 @@ describe("renderStatusLine", () => {
       {
         model: { display_name: "GPT-5.5" },
         headers: {
-          "x-quota-snapshot-premium_models": "ent=1000&rem=12.5&ov=1.5&ovPerm=true&rst=2026-06-01T00%3A00%3A00Z",
+          "x-quota-snapshot-premium_models":
+            "ent=1000&rem=12.5&ov=1.5&ovPerm=true&rst=2026-06-01T00%3A00%3A00Z",
         },
       },
       deps,
@@ -188,7 +202,10 @@ describe("renderStatusLine", () => {
         model: { display_name: "GPT-5.5" },
         cwd: "/tmp/copilotline-worktree",
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: "feature", dirty: true, worktree: true }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: "feature", dirty: true, worktree: true }),
+      },
     );
 
     expect(stripAnsi(line)).toContain("copilotline-worktree (⎇:feature*)");
@@ -204,7 +221,10 @@ describe("renderStatusLine", () => {
         session: { id: "abc", start_time: "2026-05-07T14:30:00Z" },
         cwd: "/tmp/demo",
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     expect(snapshot.session.id).toBe("abc");

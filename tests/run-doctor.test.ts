@@ -20,6 +20,13 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "Copilot | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
     });
 
     expect(report.summary.warn).toBeGreaterThan(0);
@@ -44,6 +51,13 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
     });
 
     expect(report.summary.fail).toBe(0);
@@ -69,10 +83,19 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
     });
 
     expect(report.sections[1]?.lines[1]?.status).toBe("pass");
-    expect(report.sections[1]?.lines[1]?.message).toContain("copilotline render");
+    expect(report.sections[1]?.lines[1]?.message).toContain(
+      "copilotline render",
+    );
   });
 
   test("warns when custom status visibility is disabled", () => {
@@ -93,6 +116,13 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
     });
 
     expect(report.summary.warn).toBeGreaterThan(0);
