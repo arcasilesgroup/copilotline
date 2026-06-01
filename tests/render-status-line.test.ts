@@ -135,6 +135,7 @@ describe("renderStatusLine", () => {
         ...deps,
         quota: {
           label: "premium",
+          unit: "request",
           usedPercent: 48,
           remainingPercent: 52,
           entitlement: 300,
@@ -143,6 +144,8 @@ describe("renderStatusLine", () => {
           unlimited: false,
           overageUsed: null,
           overagePermitted: null,
+          costUsd: null,
+          creditAllowanceSource: null,
           resetAt: "2026-06-01",
           source: "cache",
           login: "work-account",
@@ -230,5 +233,115 @@ describe("renderStatusLine", () => {
     expect(snapshot.session.id).toBe("abc");
     expect(snapshot.session.elapsedSeconds).toBe(1800);
     expect(snapshot.rawKeys).toEqual(["cwd", "session"]);
+  });
+});
+
+describe("renderStatusLine token/credit billing (spec-002)", () => {
+  test("renders a credits noun and allowance bar for a credit-billed account", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).not.toContain("premium");
+    expect(plain).toContain("7%");
+    expect(plain).toContain("105/1.5k");
+  });
+
+  test("renders a used-only clause when no allowance is reported (D-002-12)", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { unit: "credit", used: 420 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("420 used");
+    // no bar, no percent, no fabricated denominator
+    expect(plain).not.toContain("%");
+    expect(plain).not.toContain("/");
+  });
+
+  test("renders a tokens noun with compact magnitudes", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "token", entitlement: 5_000_000, used: 1_200_000 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 tokens");
+    expect(plain).toContain("1.2m/5m");
+  });
+
+  test("omits the quota segment entirely when there is no usable datum", () => {
+    const line = renderStatusLine({ cwd: "/x", quota: {} }, deps);
+    expect(stripAnsi(line)).not.toContain("💸");
+  });
+
+  test("reads a flat stdin quota expressed in credit alias keys", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { credit_entitlement: 1500, credits_used: 105 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("105/1.5k");
+  });
+});
+
+describe("renderStatusLine usage units/cost config (spec-002 P4)", () => {
+  test("usage.units=usd shows GitHub-reported cost as the primary value", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("$1.05");
+    expect(plain).not.toContain("105/1.5k");
+  });
+
+  test("usage.showCost appends a secondary cost clause alongside the count", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "credit", showCost: true } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).toContain("≈ $1.05");
+  });
+
+  test("usage.units=usd falls back to native counts when no cost is reported", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).not.toContain("$");
   });
 });

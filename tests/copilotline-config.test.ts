@@ -29,7 +29,9 @@ describe("readCopilotlineConfig", () => {
     const path = join(tmp, "config.json");
     writeFileSync(
       path,
-      JSON.stringify({ account: { mode: "manual", login: "octocat", host: "github.com" } }),
+      JSON.stringify({
+        account: { mode: "manual", login: "octocat", host: "github.com" },
+      }),
       "utf-8",
     );
 
@@ -38,5 +40,56 @@ describe("readCopilotlineConfig", () => {
       login: "octocat",
       host: "github.com",
     });
+  });
+
+  test("reads usage units and showCost from config; units default to credit", () => {
+    tmp = createTempDir();
+    const path = join(tmp, "config.json");
+    const prev = process.env["COPILOTLINE_USAGE_UNITS"];
+    try {
+      delete process.env["COPILOTLINE_USAGE_UNITS"];
+      writeFileSync(
+        path,
+        JSON.stringify({ usage: { showCost: true } }),
+        "utf-8",
+      );
+      expect(readCopilotlineConfig(path).usage).toEqual({
+        units: "credit",
+        showCost: true,
+      });
+
+      writeFileSync(
+        path,
+        JSON.stringify({ usage: { units: "token" } }),
+        "utf-8",
+      );
+      expect(readCopilotlineConfig(path).usage).toEqual({
+        units: "token",
+        showCost: false,
+      });
+    } finally {
+      if (prev === undefined) delete process.env["COPILOTLINE_USAGE_UNITS"];
+      else process.env["COPILOTLINE_USAGE_UNITS"] = prev;
+    }
+  });
+
+  test("COPILOTLINE_USAGE_UNITS overrides the config file units", () => {
+    tmp = createTempDir();
+    const path = join(tmp, "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ usage: { units: "token", showCost: true } }),
+      "utf-8",
+    );
+    const prev = process.env["COPILOTLINE_USAGE_UNITS"];
+    try {
+      process.env["COPILOTLINE_USAGE_UNITS"] = "usd";
+      const cfg = readCopilotlineConfig(path);
+      expect(cfg.usage.units).toBe("usd");
+      expect(cfg.usage.showCost).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env["COPILOTLINE_USAGE_UNITS"];
+      else process.env["COPILOTLINE_USAGE_UNITS"] = prev;
+    }
   });
 });

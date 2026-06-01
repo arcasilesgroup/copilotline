@@ -11,7 +11,7 @@ Cross-platform statusline companion for GitHub Copilot CLI.
 `copilotline` is a third-party tool that plugs into GitHub Copilot CLI's
 `statusLine.command` setting. It renders a compact statusline with model,
 reasoning effort, context usage, Git state, session duration, and best-effort
-premium quota usage.
+Copilot usage and quota.
 
 ![copilotline statusline demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-statusline.gif)
 
@@ -23,14 +23,15 @@ premium quota usage.
 - Context usage with color thresholds
 - Current directory, Git branch, dirty marker, and linked worktree marker
 - Session duration
-- Best-effort Copilot premium quota display synced to the active Copilot account
+- Best-effort Copilot usage/quota display (token-based AI credits, tokens, or
+  legacy premium requests) synced to the active Copilot account
 - Read-only diagnostics through `copilotline doctor`
 - npm package plus self-contained release binaries for macOS, Linux, and Windows
 
 Example output:
 
 ```text
-gpt-5.5 · xhigh │ ✍️  47% │ copilotline (⎇:main*) │ ⏱ 2h27m │ 💸 copilot-user premium ●●●○○○○○ 48% 143/300 ⟳ Jun 1 02:00
+gpt-5.5 · xhigh │ ✍️  47% │ copilotline (⎇:main*) │ ⏱ 2h27m │ 💸 copilot-user credits ●○○○○○○○ 7% 105/1.5k ⟳ Jul 1 00:00
 ```
 
 ## Install
@@ -133,22 +134,37 @@ help.
 
 ![copilotline doctor demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-cli.gif)
 
-## Premium usage and quota
+## Usage and quota
 
-`copilotline` can show Copilot premium usage:
+`copilotline` can show Copilot usage. As of 2026-06-01 GitHub bills Copilot by
+**token-based AI credits** rather than premium requests, so the segment adapts to
+whatever the account is metered in:
 
 ```text
-💸 copilot-user premium ●●●○○○○○ 48% 143/300 ⟳ Jun 1 02:00
+💸 copilot-user credits ●○○○○○○○ 7% 105/1.5k ⟳ Jul 1 00:00
 ```
+
+The displayed unit is derived from the data GitHub returns: `credits` or `tokens`
+for token-billed accounts, or the legacy `premium` request count for accounts
+still on the request model. When GitHub reports usage but no allowance, the
+segment shows a used-only reading (for example `420 used`) rather than inventing a
+denominator.
 
 Usage is fetched from GitHub's internal Copilot user endpoint:
 `GET https://api.github.com/copilot_internal/user`.
 
-The renderer prefers the newer `quota_snapshots.premium_models` data, which is
-aligned with the token-based premium model, and falls back to
-`premium_interactions` when GitHub returns the older shape. Because this endpoint
-is internal, the quota segment is best-effort and may disappear if GitHub changes
-the response.
+The renderer keys on the response *shape*, not on fixed field names: a
+credit/token snapshot wins over the legacy `quota_snapshots.premium_models` /
+`premium_interactions` request counts, and unknown snapshot keys are still
+parsed. Because this endpoint is internal and GitHub has not documented the
+token-era field names, the quota segment is best-effort and degrades to the last
+cached value (then to nothing) rather than showing a wrong number. Run
+`copilotline doctor` to see which billing unit the cached response used.
+
+Set the displayed unit with the `usage.units` config key (`credit` | `token` |
+`usd`, default `credit`) or the `COPILOTLINE_USAGE_UNITS` environment variable;
+`usage.units: usd` shows GitHub-reported cost when available (never an estimate),
+and `usage.showCost: true` appends a secondary `≈ $x.xx` clause.
 
 ### Multi-account behavior
 
@@ -164,7 +180,7 @@ selected account from:
 Quota is strict per account. If Copilot is using `work-account` but only
 `personal-account` is authenticated in `gh`, `copilotline` hides the quota segment and
 reports the mismatch in `copilotline doctor` / `copilotline accounts`. It does
-not show another account's premium usage as a fallback.
+not show another account's usage as a fallback.
 
 Inspect account detection:
 
@@ -215,6 +231,16 @@ Disable usage fetching:
 ```bash
 COPILOTLINE_USAGE=0 copilotline render
 ```
+
+Choose the displayed usage unit (`credit` | `token` | `usd`, default `credit`):
+
+```bash
+COPILOTLINE_USAGE_UNITS=usd copilotline render
+```
+
+The same setting lives in the config file under `usage.units`; `usage.showCost:
+true` appends a secondary `≈ $x.xx` clause when GitHub reports a dollar cost. The
+environment variable overrides the config file.
 
 Override the cache directory:
 
@@ -268,7 +294,7 @@ Check that `statusLine.command` points to the executable you expect and that
 Run `copilotline install` again. It writes the absolute path, so Copilot CLI does
 not depend on your shell `PATH`.
 
-### Premium quota is missing
+### Usage quota is missing
 
 Run:
 

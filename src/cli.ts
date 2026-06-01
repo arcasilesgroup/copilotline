@@ -41,6 +41,7 @@ import {
 } from "./infrastructure/copilot-account.js";
 import {
   defaultCopilotlineConfigPath,
+  readCopilotlineConfig,
   writeCopilotlineConfig,
 } from "./infrastructure/copilotline-config.js";
 import { getGitInfo } from "./infrastructure/git-info.js";
@@ -136,6 +137,7 @@ async function runRender(args: string[]): Promise<number> {
   const account = selectCopilotAccount(parsed).selected;
   const usage = quotaForRender(account);
   refreshCopilotUsageInBackground(statusLineCommand(), account);
+  const usageConfig = readCopilotlineConfig().usage;
   const snapshot = buildStatusSnapshot(parsed, {
     now: () => Date.now(),
     getGitInfo,
@@ -158,7 +160,7 @@ async function runRender(args: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(`${formatStatusLine(snapshot)}\n`);
+  process.stdout.write(`${formatStatusLine(snapshot, usageConfig)}\n`);
   return 0;
 }
 
@@ -278,12 +280,12 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       agent: { name: "task" },
       quota: {
         login: "copilot-user",
-        host: "github.com",
-        label: "premium",
+        unit: "credit",
+        label: "credits",
         usedPercent: 7,
-        entitlement: 1_000,
-        remaining: 930,
-        reset_at: "2026-06-01T00:00:00Z",
+        entitlement: 1_500,
+        remaining: 1_395,
+        reset_at: "2026-07-01T00:00:00Z",
         accountSource: "copilot-config",
         tokenSource: null,
       },
@@ -320,6 +322,7 @@ async function runDoctorCommand(args: string[]): Promise<number> {
     tokenAvailableForSelectedAccount: tokenStatus.available,
     tokenSourceForSelectedAccount: tokenStatus.source,
     tokenErrorForSelectedAccount: tokenStatus.error,
+    quotaUnit: quotaForRender(accountSelection.selected)?.unit ?? null,
   });
 
   if (args.includes("--json")) {
@@ -638,6 +641,7 @@ async function runUseAliasCommand(args: string[]): Promise<number> {
 
 function setAccountAuto(): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "auto", login: null, host: null },
   });
   process.stdout.write(
@@ -647,6 +651,7 @@ function setAccountAuto(): void {
 
 function setAccountManual(login: string, host: string): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "manual", login, host },
   });
   process.stdout.write(

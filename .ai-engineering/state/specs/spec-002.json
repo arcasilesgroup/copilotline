@@ -1,0 +1,11 @@
+{
+  "branch": null,
+  "created": "2026-06-01T13:23:39.358588+00:00",
+  "extra": {},
+  "pr": null,
+  "shipped": null,
+  "slug": "copilot-token-billing",
+  "spec_id": "spec-002",
+  "state": "draft",
+  "title": "Token-Based Billing Support for copilotline"
+}
