@@ -13,6 +13,7 @@ import {
   normalizeQuotaUnit,
   parseQuotaSnapshot,
 } from "../infrastructure/quota-snapshot.js";
+import type { UsageConfig } from "../infrastructure/copilotline-config.js";
 
 const RESET = "\x1b[0m";
 const CONTEXT_GLYPH = "✍️";
@@ -47,6 +48,7 @@ export interface RenderDeps {
   now?: () => number;
   getGitInfo?: (cwd: string) => GitInfo;
   quota?: StatusSnapshot["quota"] | null;
+  usage?: UsageConfig;
 }
 
 export function buildStatusSnapshot(
@@ -175,10 +177,13 @@ export function renderStatusLine(
   input: unknown,
   deps: RenderDeps = {},
 ): string {
-  return formatStatusLine(buildStatusSnapshot(input, deps));
+  return formatStatusLine(buildStatusSnapshot(input, deps), deps.usage);
 }
 
-export function formatStatusLine(snapshot: StatusSnapshot): string {
+export function formatStatusLine(
+  snapshot: StatusSnapshot,
+  usage?: UsageConfig,
+): string {
   const separator = ` ${style.dim}│${RESET} `;
   const segments = [
     modelSegment(snapshot.model.label, snapshot.model.effort),
@@ -193,7 +198,7 @@ export function formatStatusLine(snapshot: StatusSnapshot): string {
     snapshot.session.elapsedSeconds !== null
       ? sessionSegment(snapshot.session.elapsedSeconds)
       : null,
-    hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota) : null,
+    hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota, usage) : null,
     snapshot.model.agent ? agentSegment(snapshot.model.agent) : null,
   ].filter((segment): segment is string => Boolean(segment));
 
@@ -714,7 +719,10 @@ function quotaNoun(quota: StatusSnapshot["quota"]): string {
   return quota.label ?? "premium";
 }
 
-function quotaSegment(quota: StatusSnapshot["quota"]): string {
+function quotaSegment(
+  quota: StatusSnapshot["quota"],
+  usage?: UsageConfig,
+): string {
   const noun = quotaNoun(quota);
   const label = sanitizeText(quota.login ? `${quota.login} ${noun}` : noun);
 
@@ -722,9 +730,27 @@ function quotaSegment(quota: StatusSnapshot["quota"]): string {
     return `💸 ${palette.white}${label}${RESET} ${palette.green}∞${RESET}`;
   }
 
+  const cost = quota.costUsd;
+
+  // D-002-02: `usage.units: usd` shows GitHub-reported cost as the primary value
+  // when available; it never estimates, so without a costUsd it falls through to
+  // the native count display.
+  if (usage?.units === "usd" && cost !== null) {
+    const parts = [
+      `${palette.white}${label}${RESET}`,
+      `${palette.white}${formatUsd(cost)}${RESET}`,
+      formatReset(quota.resetAt),
+    ].filter((part): part is string => Boolean(part));
+    return `💸 ${parts.join(" ")}`;
+  }
+
   const percent =
     quota.usedPercent === null ? null : Math.round(quota.usedPercent);
   const counts = formatQuotaCounts(quota);
+  const costClause =
+    usage?.showCost && cost !== null
+      ? `${style.dim}≈ ${formatUsd(cost)}${RESET}`
+      : null;
   const parts = [
     `${palette.white}${label}${RESET}`,
     percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH),
@@ -732,11 +758,16 @@ function quotaSegment(quota: StatusSnapshot["quota"]): string {
       ? null
       : `${colorForPercentage(percent)}${percent}%${RESET}`,
     counts ? `${style.dim}${counts}${RESET}` : null,
+    costClause,
     formatReset(quota.resetAt),
     formatOverage(quota.overageUsed, quota.overagePermitted),
   ].filter((part): part is string => Boolean(part));
 
   return `💸 ${parts.join(" ")}`;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
 }
 
 function hasQuotaData(quota: StatusSnapshot["quota"]): boolean {

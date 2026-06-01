@@ -283,3 +283,55 @@ describe("renderStatusLine token/credit billing (spec-002)", () => {
     expect(stripAnsi(line)).not.toContain("💸");
   });
 });
+
+describe("renderStatusLine usage units/cost config (spec-002 P4)", () => {
+  test("usage.units=usd shows GitHub-reported cost as the primary value", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("$1.05");
+    expect(plain).not.toContain("105/1.5k");
+  });
+
+  test("usage.showCost appends a secondary cost clause alongside the count", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "credit", showCost: true } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).toContain("≈ $1.05");
+  });
+
+  test("usage.units=usd falls back to native counts when no cost is reported", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).not.toContain("$");
+  });
+});

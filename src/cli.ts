@@ -41,6 +41,7 @@ import {
 } from "./infrastructure/copilot-account.js";
 import {
   defaultCopilotlineConfigPath,
+  readCopilotlineConfig,
   writeCopilotlineConfig,
 } from "./infrastructure/copilotline-config.js";
 import { getGitInfo } from "./infrastructure/git-info.js";
@@ -136,6 +137,7 @@ async function runRender(args: string[]): Promise<number> {
   const account = selectCopilotAccount(parsed).selected;
   const usage = quotaForRender(account);
   refreshCopilotUsageInBackground(statusLineCommand(), account);
+  const usageConfig = readCopilotlineConfig().usage;
   const snapshot = buildStatusSnapshot(parsed, {
     now: () => Date.now(),
     getGitInfo,
@@ -158,7 +160,7 @@ async function runRender(args: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(`${formatStatusLine(snapshot)}\n`);
+  process.stdout.write(`${formatStatusLine(snapshot, usageConfig)}\n`);
   return 0;
 }
 
@@ -638,6 +640,7 @@ async function runUseAliasCommand(args: string[]): Promise<number> {
 
 function setAccountAuto(): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "auto", login: null, host: null },
   });
   process.stdout.write(
@@ -647,6 +650,7 @@ function setAccountAuto(): void {
 
 function setAccountManual(login: string, host: string): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "manual", login, host },
   });
   process.stdout.write(
