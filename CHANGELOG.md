@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The context-window percentage now uses Copilot CLI's `current_context_used_percentage` (the value that matches `/context`) instead of the known-buggy `used_percentage` field (github/copilot-cli#1957), and derives window capacity from `displayed_context_limit`/`context_window_size` rather than the cumulative `total_tokens` counter. Previously the statusline showed an inflated, wrong context percentage.
+- Free Copilot accounts no longer render a misleading "100% — 0/0" premium bar: a `premium_interactions` snapshot the account holds no allowance for (`has_quota: false` with zero entitlement) is skipped so the statusline reflects a unit the account actually has.
 - Quota renders identically from live data and from cache: a single shared parser treats `entitlement: -1` as unlimited and reads the `quota_remaining`/`quotaRemaining` aliases on both paths (previously the cached path showed a garbage bar where live showed ∞).
 - The render path resolves the Copilot account once and reads only the cache — no foreground `gh`/`sqlite3` subprocesses on render — and `getGitInfo` issues a single `git` spawn per in-repo render.
 - A malformed `config.json` falls back to defaults instead of crashing the render.
