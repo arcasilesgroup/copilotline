@@ -322,6 +322,7 @@ async function runDoctorCommand(args: string[]): Promise<number> {
     tokenAvailableForSelectedAccount: tokenStatus.available,
     tokenSourceForSelectedAccount: tokenStatus.source,
     tokenErrorForSelectedAccount: tokenStatus.error,
+    quotaUnit: quotaForRender(accountSelection.selected)?.unit ?? null,
   });
 
   if (args.includes("--json")) {

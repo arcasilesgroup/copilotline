@@ -3,7 +3,12 @@ import {
   type DiagnosticSection,
   type DoctorReport,
 } from "../domain/doctor.js";
-import { displayAccount, sourceLabel, type AccountIdentity } from "../infrastructure/copilot-account.js";
+import type { QuotaUnit } from "../domain/status-line.js";
+import {
+  displayAccount,
+  sourceLabel,
+  type AccountIdentity,
+} from "../infrastructure/copilot-account.js";
 
 export interface DoctorInput {
   version: string;
@@ -29,6 +34,22 @@ export interface DoctorInput {
   tokenAvailableForSelectedAccount: boolean;
   tokenSourceForSelectedAccount: string | null;
   tokenErrorForSelectedAccount: string | null;
+  quotaUnit: QuotaUnit | null;
+}
+
+// Reports which billing model the last cached upstream response used, so the
+// day GitHub changes the quota shape is observable from `doctor` (spec-002).
+function billingUnitMessage(unit: QuotaUnit | null): string {
+  if (unit === "credit") {
+    return "Billing unit: AI credits (token-based billing detected)";
+  }
+  if (unit === "token") {
+    return "Billing unit: tokens (token-based billing detected)";
+  }
+  if (unit === "request") {
+    return "Billing unit: premium requests (legacy request-count model)";
+  }
+  return "Billing unit: no quota snapshot cached yet";
 }
 
 export function runDoctor(input: DoctorInput): DoctorReport {
@@ -49,7 +70,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
           message: input.binaryAvailable
             ? `copilotline command available on PATH`
             : `copilotline command not found on PATH`,
-          fix: input.binaryAvailable ? undefined : `Install the package globally or keep using the built dist/cli.js directly.`,
+          fix: input.binaryAvailable
+            ? undefined
+            : `Install the package globally or keep using the built dist/cli.js directly.`,
         },
         {
           status: input.copilotCommandAvailable ? "pass" : "warn",
@@ -64,8 +87,12 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         },
         {
           status: input.gitAvailable ? "pass" : "warn",
-          message: input.gitAvailable ? `git command available` : `git command not found`,
-          fix: input.gitAvailable ? undefined : `Install git to enable branch, dirty-state, and worktree segments.`,
+          message: input.gitAvailable
+            ? `git command available`
+            : `git command not found`,
+          fix: input.gitAvailable
+            ? undefined
+            : `Install git to enable branch, dirty-state, and worktree segments.`,
         },
       ],
     },
@@ -77,7 +104,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
           message: input.settingsExists
             ? `Settings file found: ${input.settingsPath}`
             : `Settings file not found: ${input.settingsPath}`,
-          fix: input.settingsExists ? undefined : `Run copilotline install to create the statusLine entry.`,
+          fix: input.settingsExists
+            ? undefined
+            : `Run copilotline install to create the statusLine entry.`,
         },
         {
           status:
@@ -96,16 +125,16 @@ export function runDoctor(input: DoctorInput): DoctorReport {
                 : input.statusLineCommandAvailable === false
                   ? `statusLine.command points to ${input.statusLineCommand}, but that executable was not found`
                   : input.statusLineCommand === input.recommendedCommand
-                      ? `statusLine.command is wired to ${input.recommendedCommand}`
-                      : `statusLine.command points to ${input.statusLineCommand}`,
+                    ? `statusLine.command is wired to ${input.recommendedCommand}`
+                    : `statusLine.command points to ${input.statusLineCommand}`,
           fix:
             input.settingsParseError !== null
               ? `Fix the JSONC syntax in settings.json before running install again.`
               : input.statusLineCommand === null
                 ? `Run copilotline install to create the statusLine entry.`
                 : input.statusLineCommandAvailable === false
-                    ? `Install the configured executable or run copilotline install to point statusLine.command to ${input.recommendedCommand}.`
-                    : undefined,
+                  ? `Install the configured executable or run copilotline install to point statusLine.command to ${input.recommendedCommand}.`
+                  : undefined,
         },
         {
           status:
@@ -172,9 +201,14 @@ export function runDoctor(input: DoctorInput): DoctorReport {
               ? `Quota token available for ${displayAccount(input.selectedAccount)} (${input.tokenSourceForSelectedAccount})`
               : `No quota token available for ${displayAccount(input.selectedAccount)}`
             : `No quota account selected`,
-          fix: input.selectedAccount && !input.tokenAvailableForSelectedAccount
-            ? `Authenticate ${displayAccount(input.selectedAccount)} with gh auth login, or set a matching COPILOTLINE_GITHUB_TOKEN.`
-            : undefined,
+          fix:
+            input.selectedAccount && !input.tokenAvailableForSelectedAccount
+              ? `Authenticate ${displayAccount(input.selectedAccount)} with gh auth login, or set a matching COPILOTLINE_GITHUB_TOKEN.`
+              : undefined,
+        },
+        {
+          status: "pass",
+          message: billingUnitMessage(input.quotaUnit),
         },
       ],
     },
@@ -186,7 +220,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
           message: input.renderPreview
             ? `Synthetic render succeeded: ${input.renderPreview}`
             : `Synthetic render failed`,
-          fix: input.renderPreview ? undefined : `Inspect render logic and payload normalization.`,
+          fix: input.renderPreview
+            ? undefined
+            : `Inspect render logic and payload normalization.`,
         },
       ],
     },
@@ -201,5 +237,8 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 }
 
 function sameAccount(a: AccountIdentity, b: AccountIdentity): boolean {
-  return a.login.toLowerCase() === b.login.toLowerCase() && a.host.toLowerCase() === b.host.toLowerCase();
+  return (
+    a.login.toLowerCase() === b.login.toLowerCase() &&
+    a.host.toLowerCase() === b.host.toLowerCase()
+  );
 }
