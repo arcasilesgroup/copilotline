@@ -8,7 +8,11 @@ import {
   pickString,
   pickUnknown,
 } from "../infrastructure/value-reader.js";
-import { parseQuotaSnapshot } from "../infrastructure/quota-snapshot.js";
+import {
+  deriveQuotaUnit,
+  normalizeQuotaUnit,
+  parseQuotaSnapshot,
+} from "../infrastructure/quota-snapshot.js";
 
 const RESET = "\x1b[0m";
 const CONTEXT_GLYPH = "✍️";
@@ -50,7 +54,9 @@ export function buildStatusSnapshot(
   deps: RenderDeps = {},
 ): StatusSnapshot {
   const now = deps.now ?? Date.now;
-  const getGitInfo = deps.getGitInfo ?? (() => ({ branch: null, dirty: false, worktree: false }));
+  const getGitInfo =
+    deps.getGitInfo ??
+    (() => ({ branch: null, dirty: false, worktree: false }));
 
   const cwd =
     pickString(
@@ -63,7 +69,9 @@ export function buildStatusSnapshot(
       ["workspace", "projectDir"],
     ) ?? null;
 
-  const git = cwd ? getGitInfo(cwd) : { branch: null, dirty: false, worktree: false };
+  const git = cwd
+    ? getGitInfo(cwd)
+    : { branch: null, dirty: false, worktree: false };
   const modelLabel =
     pickString(
       input,
@@ -142,12 +150,14 @@ export function buildStatusSnapshot(
         ) ?? null,
     },
     session: {
-      id: pickString(input, ["session", "id"], ["session_id"], ["sessionId"]) ?? null,
+      id:
+        pickString(input, ["session", "id"], ["session_id"], ["sessionId"]) ??
+        null,
       startedAt,
       elapsedSeconds,
     },
     context: normalizeContext(input),
-    quota: hasQuotaData(inputQuota) ? inputQuota : deps.quota ?? emptyQuota(),
+    quota: hasQuotaData(inputQuota) ? inputQuota : (deps.quota ?? emptyQuota()),
     directory: {
       cwd,
       name: directoryName(cwd),
@@ -161,7 +171,10 @@ export function buildStatusSnapshot(
   };
 }
 
-export function renderStatusLine(input: unknown, deps: RenderDeps = {}): string {
+export function renderStatusLine(
+  input: unknown,
+  deps: RenderDeps = {},
+): string {
   return formatStatusLine(buildStatusSnapshot(input, deps));
 }
 
@@ -172,7 +185,10 @@ export function formatStatusLine(snapshot: StatusSnapshot): string {
     contextSegment(snapshot.context.usedPercent),
     snapshot.context.usedPercent !== null
       ? null
-      : tokenContextSegment(snapshot.context.usedTokens, snapshot.context.totalTokens),
+      : tokenContextSegment(
+          snapshot.context.usedTokens,
+          snapshot.context.totalTokens,
+        ),
     directorySegment(snapshot),
     snapshot.session.elapsedSeconds !== null
       ? sessionSegment(snapshot.session.elapsedSeconds)
@@ -242,10 +258,8 @@ function normalizeContext(input: unknown): StatusSnapshot["context"] {
   return {
     usedPercent:
       usedPercent ??
-      (usedTokens !== null &&
-      totalTokens !== null &&
-      totalTokens > 0
-        ? clampPercent((usedTokens / totalTokens) * 100) ?? null
+      (usedTokens !== null && totalTokens !== null && totalTokens > 0
+        ? (clampPercent((usedTokens / totalTokens) * 100) ?? null)
         : null),
     usedTokens,
     totalTokens,
@@ -305,22 +319,68 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
       ),
     ) ?? null;
   const entitlement =
-    pickNumber(input, ["quota", "entitlement"], ["quota_window", "entitlement"]) ?? null;
+    pickNumber(
+      input,
+      ["quota", "entitlement"],
+      ["quota_window", "entitlement"],
+    ) ?? null;
   const remaining =
-    pickNumber(input, ["quota", "remaining"], ["quota_window", "remaining"]) ?? null;
+    pickNumber(input, ["quota", "remaining"], ["quota_window", "remaining"]) ??
+    null;
   const used =
     pickNumber(input, ["quota", "used"], ["quota_window", "used"]) ??
     computeUsedQuota(entitlement, remaining);
   const usedPercentFromCounts =
     entitlement !== null && entitlement > 0 && used !== null
-      ? clampPercent((used / entitlement) * 100) ?? null
+      ? (clampPercent((used / entitlement) * 100) ?? null)
       : null;
+  const quotaRecord =
+    asRecord(
+      pickUnknown(input, ["quota"], ["quota_window"], ["quotaWindow"]),
+    ) ?? {};
+  const unit =
+    normalizeQuotaUnit(
+      pickString(
+        input,
+        ["quota", "unit"],
+        ["quota", "type"],
+        ["quota_window", "unit"],
+      ),
+    ) ?? deriveQuotaUnit(quotaRecord);
+  const costUsd =
+    pickNumber(
+      input,
+      ["quota", "cost_usd"],
+      ["quota", "costUsd"],
+      ["quota", "cost"],
+    ) ?? null;
+  const creditAllowanceSource =
+    pickString(
+      input,
+      ["quota", "allowance_source"],
+      ["quota", "allowanceSource"],
+      ["quota", "creditAllowanceSource"],
+    ) ?? null;
 
   return {
-    login: pickString(input, ["quota", "login"], ["quota", "account"], ["quota_window", "login"]) ?? null,
-    host: pickString(input, ["quota", "host"], ["quota", "hostname"], ["quota_window", "host"]) ?? null,
+    login:
+      pickString(
+        input,
+        ["quota", "login"],
+        ["quota", "account"],
+        ["quota_window", "login"],
+      ) ?? null,
+    host:
+      pickString(
+        input,
+        ["quota", "host"],
+        ["quota", "hostname"],
+        ["quota_window", "host"],
+      ) ?? null,
     label,
-    usedPercent: usedPercent ?? invertPercent(remainingPercent) ?? usedPercentFromCounts,
+    unit,
+    usedPercent:
+      usedPercent ?? invertPercent(remainingPercent) ?? usedPercentFromCounts,
     remainingPercent,
     entitlement,
     remaining,
@@ -328,6 +388,8 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd,
+    creditAllowanceSource,
     resetAt:
       pickString(
         input,
@@ -339,8 +401,15 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
         ["quota_window", "resetAt"],
       ) ?? null,
     source: null,
-    accountSource: pickString(input, ["quota", "accountSource"], ["quota", "account_source"]) ?? null,
-    tokenSource: pickString(input, ["quota", "tokenSource"], ["quota", "token_source"]) ?? null,
+    accountSource:
+      pickString(
+        input,
+        ["quota", "accountSource"],
+        ["quota", "account_source"],
+      ) ?? null,
+    tokenSource:
+      pickString(input, ["quota", "tokenSource"], ["quota", "token_source"]) ??
+      null,
   };
 }
 
@@ -373,11 +442,18 @@ function quotaFromSnapshots(input: unknown): StatusSnapshot["quota"] | null {
     ["completions", "completions", "completions"],
   ];
   const resetAt = readString(
-    pickUnknown(input, ["quota_reset_date"], ["quotaResetDate"], ["quota_reset_date_utc"], ["quotaResetDateUtc"]),
+    pickUnknown(
+      input,
+      ["quota_reset_date"],
+      ["quotaResetDate"],
+      ["quota_reset_date_utc"],
+      ["quotaResetDateUtc"],
+    ),
   );
 
   for (const [snakeKey, camelKey, label] of candidates) {
-    const snapshot = asRecord(snapshots[snakeKey]) ?? asRecord(snapshots[camelKey]);
+    const snapshot =
+      asRecord(snapshots[snakeKey]) ?? asRecord(snapshots[camelKey]);
     if (!snapshot) {
       continue;
     }
@@ -407,8 +483,17 @@ function quotaFromHeaders(input: unknown): StatusSnapshot["quota"] | null {
   }
 
   const candidates: Array<[string[], string]> = [
-    [["x-quota-snapshot-premium_models", "x-quota-snapshot-premiummodels"], "premium_models"],
-    [["x-quota-snapshot-premium_interactions", "x-quota-snapshot-premiuminteractions"], "premium_interactions"],
+    [
+      ["x-quota-snapshot-premium_models", "x-quota-snapshot-premiummodels"],
+      "premium_models",
+    ],
+    [
+      [
+        "x-quota-snapshot-premium_interactions",
+        "x-quota-snapshot-premiuminteractions",
+      ],
+      "premium_interactions",
+    ],
     [["x-quota-snapshot-chat"], "chat"],
     [["x-quota-snapshot-completions"], "completions"],
   ];
@@ -429,7 +514,6 @@ function quotaFromHeaders(input: unknown): StatusSnapshot["quota"] | null {
     if (quota && hasQuotaData(quota)) {
       return withPayloadAccount(quota, input);
     }
-
   }
 
   return null;
@@ -449,51 +533,66 @@ function withPayloadAccount(
 }
 
 function accountLoginFromInput(input: unknown): string | null {
-  return pickString(
-    input,
-    ["account", "login"],
-    ["account", "username"],
-    ["github", "login"],
-    ["github", "user", "login"],
-    ["user", "login"],
-    ["user", "username"],
-    ["authentication", "login"],
-    ["authentication", "user", "login"],
-    ["copilot", "account", "login"],
-    ["copilot", "user", "login"],
-  ) ?? null;
+  return (
+    pickString(
+      input,
+      ["account", "login"],
+      ["account", "username"],
+      ["github", "login"],
+      ["github", "user", "login"],
+      ["user", "login"],
+      ["user", "username"],
+      ["authentication", "login"],
+      ["authentication", "user", "login"],
+      ["copilot", "account", "login"],
+      ["copilot", "user", "login"],
+    ) ?? null
+  );
 }
 
 function accountHostFromInput(input: unknown): string | null {
-  return pickString(
-    input,
-    ["account", "host"],
-    ["account", "hostname"],
-    ["github", "host"],
-    ["github", "hostname"],
-    ["authentication", "host"],
-    ["authentication", "hostname"],
-  ) ?? null;
+  return (
+    pickString(
+      input,
+      ["account", "host"],
+      ["account", "hostname"],
+      ["github", "host"],
+      ["github", "hostname"],
+      ["authentication", "host"],
+      ["authentication", "hostname"],
+    ) ?? null
+  );
 }
 
-function quotaFromHeaderValue(value: string, label: string, source: string): StatusSnapshot["quota"] | null {
+function quotaFromHeaderValue(
+  value: string,
+  label: string,
+  source: string,
+): StatusSnapshot["quota"] | null {
   const params = new URLSearchParams(value);
+  const unit = normalizeQuotaUnit(params.get("unit")) ?? "request";
   const entitlement = readNumberValue(params.get("ent"));
-  const remainingPercent = clampPercent(readNumberValue(params.get("rem"))) ?? null;
+  const remainingPercent =
+    clampPercent(readNumberValue(params.get("rem"))) ?? null;
   const overagePermitted = params.get("ovPerm") === "true";
+  // D-002-10: only the legacy request unit treats entitlement === -1 as unlimited.
+  const unlimited = unit === "request" && entitlement === -1;
 
   return {
     login: null,
     host: null,
     label,
-    usedPercent: entitlement === -1 ? 0 : invertPercent(remainingPercent),
+    unit,
+    usedPercent: unlimited ? 0 : invertPercent(remainingPercent),
     remainingPercent,
     entitlement,
     remaining: null,
     used: null,
-    unlimited: entitlement === -1,
+    unlimited,
     overageUsed: readNumberValue(params.get("ov")),
     overagePermitted,
+    costUsd: readNumberValue(params.get("cost")),
+    creditAllowanceSource: readString(params.get("allowance_source")),
     resetAt: readString(params.get("rst")),
     source,
     accountSource: null,
@@ -501,7 +600,10 @@ function quotaFromHeaderValue(value: string, label: string, source: string): Sta
   };
 }
 
-function computeElapsedSeconds(startedAt: string | null, nowMs: number): number | null {
+function computeElapsedSeconds(
+  startedAt: string | null,
+  nowMs: number,
+): number | null {
   if (!startedAt) {
     return null;
   }
@@ -551,7 +653,10 @@ function contextSegment(usedPercent: number | null): string | null {
   return `${CONTEXT_GLYPH}  ${colorForPercentage(percent)}${percent}%${RESET}`;
 }
 
-function tokenContextSegment(usedTokens: number | null, totalTokens: number | null): string | null {
+function tokenContextSegment(
+  usedTokens: number | null,
+  totalTokens: number | null,
+): string | null {
   if (usedTokens === null || totalTokens === null || totalTokens <= 0) {
     return null;
   }
@@ -571,7 +676,9 @@ function directorySegment(snapshot: StatusSnapshot): string | null {
     return name;
   }
 
-  const dirty = snapshot.directory.git.dirty ? `${palette.red}*${palette.green}` : "";
+  const dirty = snapshot.directory.git.dirty
+    ? `${palette.red}*${palette.green}`
+    : "";
   const worktree = snapshot.directory.git.worktree ? "⎇:" : "";
   return `${name} ${palette.green}(${worktree}${sanitizeText(branch)}${dirty})${RESET}`;
 }
@@ -598,19 +705,22 @@ function quotaSegment(quota: StatusSnapshot["quota"]): string {
   const label = sanitizeText(
     quota.login
       ? `${quota.login} ${quota.label ?? "premium"}`
-      : quota.label ?? "premium",
+      : (quota.label ?? "premium"),
   );
 
   if (quota.unlimited) {
     return `💸 ${palette.white}${label}${RESET} ${palette.green}∞${RESET}`;
   }
 
-  const percent = quota.usedPercent === null ? null : Math.round(quota.usedPercent);
+  const percent =
+    quota.usedPercent === null ? null : Math.round(quota.usedPercent);
   const counts = formatQuotaCounts(quota);
   const parts = [
     `${palette.white}${label}${RESET}`,
     percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH),
-    percent === null ? null : `${colorForPercentage(percent)}${percent}%${RESET}`,
+    percent === null
+      ? null
+      : `${colorForPercentage(percent)}${percent}%${RESET}`,
     counts ? `${style.dim}${counts}${RESET}` : null,
     formatReset(quota.resetAt),
     formatOverage(quota.overageUsed, quota.overagePermitted),
@@ -634,6 +744,7 @@ function emptyQuota(): StatusSnapshot["quota"] {
     login: null,
     host: null,
     label: null,
+    unit: "request",
     usedPercent: null,
     remainingPercent: null,
     entitlement: null,
@@ -642,6 +753,8 @@ function emptyQuota(): StatusSnapshot["quota"] {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd: null,
+    creditAllowanceSource: null,
     resetAt: null,
     source: null,
     accountSource: null,
@@ -695,10 +808,13 @@ function escapeRegExp(value: string): string {
 }
 
 function invertPercent(percent: number | null): number | null {
-  return percent === null ? null : clampPercent(100 - percent) ?? null;
+  return percent === null ? null : (clampPercent(100 - percent) ?? null);
 }
 
-function findHeaderValue(headers: Record<string, unknown>, names: string[]): string | null {
+function findHeaderValue(
+  headers: Record<string, unknown>,
+  names: string[],
+): string | null {
   const normalized = new Map<string, string>();
   for (const [key, value] of Object.entries(headers)) {
     if (typeof value === "string" && value.trim() !== "") {
@@ -733,7 +849,10 @@ function readNumberValue(value: unknown): number | null {
   return null;
 }
 
-function computeUsedQuota(entitlement: number | null, remaining: number | null): number | null {
+function computeUsedQuota(
+  entitlement: number | null,
+  remaining: number | null,
+): number | null {
   if (entitlement === null || remaining === null) {
     return null;
   }
@@ -746,7 +865,8 @@ function formatQuotaCounts(quota: StatusSnapshot["quota"]): string | null {
     return null;
   }
 
-  const used = quota.used ?? computeUsedQuota(quota.entitlement, quota.remaining);
+  const used =
+    quota.used ?? computeUsedQuota(quota.entitlement, quota.remaining);
   if (used === null) {
     return null;
   }
@@ -767,7 +887,9 @@ function formatCompactNumber(value: number): string {
 }
 
 function formatCompactDecimal(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(1).replace(/\.0$/, "");
 }
 
 export function formatReset(resetAt: string | null): string | null {
@@ -780,7 +902,20 @@ export function formatReset(resetAt: string | null): string | null {
     return null;
   }
 
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const month = months[date.getUTCMonth()] ?? "";
   const day = date.getUTCDate();
   const hour = String(date.getUTCHours()).padStart(2, "0");
@@ -788,7 +923,10 @@ export function formatReset(resetAt: string | null): string | null {
   return `${style.dim}⟳${RESET} ${palette.white}${month} ${day} ${hour}:${minute} UTC${RESET}`;
 }
 
-function formatOverage(overageUsed: number | null, overagePermitted: boolean | null): string | null {
+function formatOverage(
+  overageUsed: number | null,
+  overagePermitted: boolean | null,
+): string | null {
   if (!overagePermitted || overageUsed === null || overageUsed <= 0) {
     return null;
   }

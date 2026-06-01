@@ -52,4 +52,33 @@ describe("copilot usage", () => {
   test("returns null when the response has no usable quota", () => {
     expect(parseCopilotUsageResponse({ quota_snapshots: {} })).toBeNull();
   });
+
+  test("parses an unknown token/credit snapshot key and prefers it (D-002-05)", () => {
+    const quota = parseCopilotUsageResponse({
+      quota_reset_date: "2026-07-01T00:00:00Z",
+      quota_snapshots: {
+        // legacy request key still present, but a new credit key should win
+        premium_models: { entitlement: 1_000, remaining: 900 },
+        credit_usage: { credit_entitlement: 1500, credits_remaining: 1395 },
+      },
+    });
+
+    expect(quota?.unit).toBe("credit");
+    expect(quota?.entitlement).toBe(1500);
+    expect(quota?.remaining).toBe(1395);
+  });
+
+  test("degrades to null without throwing on malformed input", () => {
+    expect(parseCopilotUsageResponse(null)).toBeNull();
+    expect(parseCopilotUsageResponse("nonsense")).toBeNull();
+    expect(parseCopilotUsageResponse({ quota_snapshots: "bad" })).toBeNull();
+    expect(
+      parseCopilotUsageResponse({ quota_snapshots: { premium_models: 5 } }),
+    ).toBeNull();
+    expect(
+      parseCopilotUsageResponse({
+        quota_snapshots: { weird_key: { nothing: true } },
+      }),
+    ).toBeNull();
+  });
 });

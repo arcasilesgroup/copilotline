@@ -28,10 +28,13 @@ export interface ContextSnapshot {
   totalTokens: number | null;
 }
 
+export type QuotaUnit = "request" | "credit" | "token";
+
 export interface QuotaSnapshot {
   login: string | null;
   host: string | null;
   label: string | null;
+  unit: QuotaUnit;
   usedPercent: number | null;
   remainingPercent: number | null;
   entitlement: number | null;
@@ -40,6 +43,8 @@ export interface QuotaSnapshot {
   unlimited: boolean;
   overageUsed: number | null;
   overagePermitted: boolean | null;
+  costUsd: number | null;
+  creditAllowanceSource: string | null;
   resetAt: string | null;
   source: string | null;
   accountSource: string | null;

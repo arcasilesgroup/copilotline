@@ -20,6 +20,7 @@ function quota(): QuotaSnapshot {
     login: "render-acct",
     host: "github.com",
     label: "premium",
+    unit: "request",
     usedPercent: 42,
     remainingPercent: 58,
     entitlement: 100,
@@ -28,6 +29,8 @@ function quota(): QuotaSnapshot {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd: null,
+    creditAllowanceSource: null,
     resetAt: null,
     source: "premium_models",
     accountSource: "copilot-config",
@@ -43,9 +46,11 @@ describe("render path takes a pre-resolved account (no re-detection, no spawn)",
   afterEach(() => {
     if (tmp) cleanupTempDir(tmp);
     tmp = null;
-    if (originalCacheDir === undefined) delete process.env["COPILOTLINE_CACHE_DIR"];
+    if (originalCacheDir === undefined)
+      delete process.env["COPILOTLINE_CACHE_DIR"];
     else process.env["COPILOTLINE_CACHE_DIR"] = originalCacheDir;
-    if (originalAccount === undefined) delete process.env["COPILOTLINE_ACCOUNT"];
+    if (originalAccount === undefined)
+      delete process.env["COPILOTLINE_ACCOUNT"];
     else process.env["COPILOTLINE_ACCOUNT"] = originalAccount;
   });
 

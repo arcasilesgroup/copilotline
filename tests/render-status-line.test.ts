@@ -135,6 +135,7 @@ describe("renderStatusLine", () => {
         ...deps,
         quota: {
           label: "premium",
+          unit: "request",
           usedPercent: 48,
           remainingPercent: 52,
           entitlement: 300,
@@ -143,6 +144,8 @@ describe("renderStatusLine", () => {
           unlimited: false,
           overageUsed: null,
           overagePermitted: null,
+          costUsd: null,
+          creditAllowanceSource: null,
           resetAt: "2026-06-01",
           source: "cache",
           login: "work-account",
