@@ -235,3 +235,51 @@ describe("renderStatusLine", () => {
     expect(snapshot.rawKeys).toEqual(["cwd", "session"]);
   });
 });
+
+describe("renderStatusLine token/credit billing (spec-002)", () => {
+  test("renders a credits noun and allowance bar for a credit-billed account", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).not.toContain("premium");
+    expect(plain).toContain("7%");
+    expect(plain).toContain("105/1.5k");
+  });
+
+  test("renders a used-only clause when no allowance is reported (D-002-12)", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { unit: "credit", used: 420 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("420 used");
+    // no bar, no percent, no fabricated denominator
+    expect(plain).not.toContain("%");
+    expect(plain).not.toContain("/");
+  });
+
+  test("renders a tokens noun with compact magnitudes", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "token", entitlement: 5_000_000, used: 1_200_000 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 tokens");
+    expect(plain).toContain("1.2m/5m");
+  });
+
+  test("omits the quota segment entirely when there is no usable datum", () => {
+    const line = renderStatusLine({ cwd: "/x", quota: {} }, deps);
+    expect(stripAnsi(line)).not.toContain("💸");
+  });
+});

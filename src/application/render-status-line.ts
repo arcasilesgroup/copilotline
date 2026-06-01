@@ -701,12 +701,22 @@ function formatDuration(elapsedSeconds: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h${minutes}m`;
 }
 
+function quotaNoun(quota: StatusSnapshot["quota"]): string {
+  // D-002-02: the noun derives from the billing unit. Credit/token accounts read
+  // "credits"/"tokens"; the legacy request unit keeps its GitHub-supplied label
+  // (premium/chat/completions), defaulting to "premium".
+  if (quota.unit === "credit") {
+    return "credits";
+  }
+  if (quota.unit === "token") {
+    return "tokens";
+  }
+  return quota.label ?? "premium";
+}
+
 function quotaSegment(quota: StatusSnapshot["quota"]): string {
-  const label = sanitizeText(
-    quota.login
-      ? `${quota.login} ${quota.label ?? "premium"}`
-      : (quota.label ?? "premium"),
-  );
+  const noun = quotaNoun(quota);
+  const label = sanitizeText(quota.login ? `${quota.login} ${noun}` : noun);
 
   if (quota.unlimited) {
     return `💸 ${palette.white}${label}${RESET} ${palette.green}∞${RESET}`;
@@ -861,14 +871,16 @@ function computeUsedQuota(
 }
 
 function formatQuotaCounts(quota: StatusSnapshot["quota"]): string | null {
-  if (quota.entitlement === null) {
-    return null;
-  }
-
   const used =
     quota.used ?? computeUsedQuota(quota.entitlement, quota.remaining);
   if (used === null) {
     return null;
+  }
+
+  // D-002-12: no reported allowance -> show a used-only clause with no fabricated
+  // denominator (the most likely live shape under token billing).
+  if (quota.entitlement === null) {
+    return `${formatCompactNumber(used)} used`;
   }
 
   return `${formatCompactNumber(used)}/${formatCompactNumber(quota.entitlement)}`;
