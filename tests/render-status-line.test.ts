@@ -81,6 +81,53 @@ describe("renderStatusLine", () => {
     expect(plain).toContain("⏱ 1h5m");
   });
 
+  test("prefers current_context_used_percentage over the buggy used_percentage (#1957)", () => {
+    // Copilot CLI sends BOTH fields. `used_percentage` is the known-buggy value
+    // (full window + last call); `current_context_used_percentage` matches what
+    // `/context` reports. The correct field must win.
+    const line = renderStatusLine(
+      {
+        model: { display_name: "GPT-5" },
+        cwd: "/tmp/copilotline",
+        context_window: {
+          used_percentage: 85,
+          current_context_used_percentage: 32,
+          current_context_tokens: 64_000,
+          displayed_context_limit: 200_000,
+          total_tokens: 512_345,
+          context_window_size: 200_000,
+        },
+      },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("✍️  32%");
+    expect(plain).not.toContain("85%");
+  });
+
+  test("snapshot capacity uses displayed_context_limit, not cumulative total_tokens", () => {
+    const snapshot = buildStatusSnapshot(
+      {
+        context_window: {
+          current_context_used_percentage: 32,
+          current_context_tokens: 64_000,
+          displayed_context_limit: 200_000,
+          total_tokens: 512_345,
+        },
+      },
+      { now: fixedNow },
+    );
+
+    expect(snapshot.context.usedPercent).toBe(32);
+    expect(snapshot.context.usedTokens).toBe(64_000);
+    // The cumulative 512_345 counter must NOT be treated as window capacity.
+    expect(snapshot.context.totalTokens).toBe(200_000);
+  });
+
   test("renders Copilot reasoning effort from nested model fields", () => {
     const line = renderStatusLine(
       {
