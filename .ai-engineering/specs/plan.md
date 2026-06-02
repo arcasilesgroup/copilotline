@@ -1,251 +1,255 @@
 ---
 execution_route:
   version: 1
-  spec: spec-004
+  spec: spec-005
   executor: build
   automation: autonomous
-  concern_count: 1
-  estimated_files: 3
-  reason: "Single-concern security hotfix at the runRender/safeParse boundary in src/cli.ts plus its tests and a CHANGELOG note. No domain changes, no parallel waves, fully automatable in-env (no vhs/manual steps). Well under the autopilot threshold."
+  concern_count: 2
+  estimated_files: 10
+  reason: "Two cohesive concerns: a small security hardening at the runRender boundary (src/cli.ts + tests) and an install-wizard demo (VHS tape + harness + offline /user mock + README/DEMOS/CHANGELOG). No DAG, no parallel waves, all in-env (vhs+node installed; the token-ok mock has an in-build honest fallback). Under the autopilot threshold."
   safe_next_command: "/ai-build"
-spec: spec-004
-slug: render-empty-stdin-pii
-title: Guard render against empty/invalid stdin leaking the real account — execution plan
+spec: spec-005
+slug: harden-empty-object-and-install-demo
+title: Harden render against contentless objects + install-wizard demo — execution plan
 status: approved
-pipeline: hotfix
+pipeline: full
 created: 2026-06-02
 ---
 
-# Plan — spec-004 render empty/invalid stdin PII guard
+# Plan — spec-005 harden `{}` + install demo
 
-## Code facts (read-only exploration, 2026-06-02)
+## Code facts (read-only, 2026-06-02, post spec-004)
 
-- `runRender(args)` — `src/cli.ts:129-165`: reads stdin → `safeParse` → then
-  **unconditionally** `selectCopilotAccount(parsed).selected` (`:137`),
-  `quotaForRender(account)` (`:138`), `refreshCopilotUsageInBackground(...)`
-  (`:139`), `buildStatusSnapshot(parsed, …)`; then `--json` branch (`:147-161`)
-  or `formatStatusLine` (`:163`). Both output paths return 0.
-- `safeParse(raw)` — `src/cli.ts:735-745`: returns `{}` for BOTH `raw.trim()===""`
-  and `JSON.parse` failure → the collapse that erases the empty-vs-payload signal.
-- Bare invocation — `src/cli.ts:112-119`: non-TTY stdin → `runRender([])` (same path).
-- `modelSegment` — `src/application/render-status-line.ts:681`: `label?.trim() ||
-  "Copilot"` (cosmetic fallback, OUT OF SCOPE per spec Non-Goals).
-- Quota ternary — `render-status-line.ts:162`: `hasQuotaData(inputQuota) ?
-  inputQuota : (deps.quota ?? emptyQuota())` → empty payload routes to the live
-  `deps.quota` (host cache).
-- Tests — `tests/cli.test.ts`: `run()` helper (`:13-28`) hardcodes
-  `COPILOTLINE_USAGE:"0", COPILOTLINE_ACCOUNT:"0"` (masks the bug). Tests build
-  `dist/cli.js` in `beforeAll`. `tests/helpers.js` exposes
-  `createTempDir`/`cleanupTempDir`. Account resolution order
-  (`copilot-account.ts`): payload → `~/.copilot/config.json` → VS Code sqlite3 →
-  `gh` (first non-manual candidate wins → a fixture `COPILOT_HOME` config short-
-  circuits before VS Code/gh).
+- `runRender` guard — `src/cli.ts:139`: `if (parsed.kind !== "payload") { …
+  placeholder … return 0; }`. The contentless-object leak: a parsed object is
+  `{kind:"payload"}` (`safeParse` `:771-784`, already gated by `asRecord`), so
+  `{}`/`{"zzz":1}` skip the guard and reach `selectCopilotAccount(payload)` (`:168`).
+- `asRecord` imported at `cli.ts:48`. The stderr diagnostic is gated on
+  `parsed.kind === "invalid"` (`:140`), so a contentless *object* (kind=payload)
+  naturally stays silent — D-005-02 needs no extra code there.
+- Token "token ok" path: `resolveTokenForAccount` → `loginForToken(token, host,
+  options)` → `options.fetchImpl ?? fetch` GET `${usageApiBaseForHost(host)}/user`
+  (`copilot-account.ts:413-423`). The live CLI uses global `fetch`; the bundle is
+  `bun build --target=node` run under Node, so `node --import <mock>.mjs` can
+  patch global fetch/undici to answer `/user` offline → enables "token ok" with
+  fabricated tokens, no network. (`fetchImpl` injection confirms the seam exists.)
+- Demo harness: `docs/fixtures/render-demos.sh` (outside-VHS wrapper, exports
+  `$CL_DEMO`, sources `$CL_DEMO/env.sh` in the tape), `seed-demo-shell.sh`
+  (assembles the octocat env + writes env.sh; its `copilotline` shim appends
+  `--no-account` to install — which SKIPS the picker, so the install demo needs a
+  shim WITHOUT `--no-account`). Install picker enumerates accounts from
+  `detectCopilotAccounts()` (Copilot config + VS Code sqlite3 + gh).
 
-## Design
+## Design (`--skip-design`)
 
-`--skip-design` (no UI). Output contract decided in spec-004 interrogation:
-empty/invalid stdin → stdout placeholder `copilotline` (exit 0, zero host data);
-invalid JSON additionally writes one diagnostic line to **stderr**; `--json`
-emits a neutral envelope with `data: null`.
+No UI surface. Output contracts already decided in spec-005:
+- Hardening: contentless object → silent `copilotline` placeholder (exit 0),
+  like empty stdin; only JSON-parse failures keep the stderr diagnostic.
+- Install demo: `copilotline install` → installed line → account box → "Choose
+  quota account" with dummy octocat/monalisa/hubot → a typed `Select` answer →
+  confirmation. "token ok" via offline `/user` mock; fallback "token missing".
 
 ## Architecture
 
-`ad-hoc` — guard clause at the application/CLI boundary (`runRender`). Hexagonal
-domain (`render-status-line`, `copilot-account`, `copilot-usage`) is **untouched**;
-the fix is purely "do not call the host readers when there is no payload".
+`ad-hoc` — guard clause at the CLI boundary (`runRender`) + demo tooling. Domain
+untouched; no production token-verification change (mock is `node --import`,
+demo-only).
 
 ## TDD
 
-RED test task (T-1) precedes the GREEN implementation (T-2/T-3): the empty/invalid
-no-leak tests must fail against current `main`, then pass after the guard.
+T-1 (RED contentless-object no-leak tests) precedes T-2 (GREEN predicate).
 
 ---
 
-## Phase 1 — RED
+## Phase 1 — Hardening (TDD)
 
-### T-1 — Failing tests: empty/invalid stdin must not leak the host account
+### T-1 — RED: contentless objects must not leak the account
 - Agent: build
-- Files: `tests/cli.test.ts` (new cases + a non-masking runner), uses `tests/helpers.js` `createTempDir`
+- Files: `tests/cli.test.ts` (extend the spec-004 `runNoLeak` octocat-fixture harness)
 - Principles applied: §10.5 TDD, §10.7 Clean Code
-- Patch (deterministic): — (judgment: fixture setup + assertions)
-- Detail: Add tests that DO NOT use the bug-masking env. Create a temp
-  `COPILOT_HOME` fixture with `config.json`
-  `{"lastLoggedInUser":{"login":"octocat","host":"github.com"}}` and an octocat
-  usage-cache, then spawn `node dist/cli.js render` with env
-  `{ COPILOTLINE_ACCOUNT: "1", COPILOTLINE_USAGE: "1", COPILOT_HOME: <fixture> }`
-  (detection ENABLED, pointed at the fixture so a leak would surface "octocat"):
-  - empty stdin (`input: ""`): assert `status === 0`, `stdout.trim() === "copilotline"`,
-    and `stdout` does NOT contain `octocat`, `195`, `(main)`, or `credits`.
-  - invalid stdin (`input: "not json"`): same stdout assertions, plus
-    `stderr` matches `/invalid/i`.
-  - `render --json` empty: assert `status === 0`, parsed JSON has `data === null`
-    and the string `octocat` is absent.
-  - regression GOLDEN: a valid payload (`{model:{displayName:"GPT-5.4"},contextWindow:{usedPercent:12}}`)
-    still renders `GPT-5.4` + `12%` (unchanged) — using the existing masked `run()` is fine here.
-- Gate: the three empty/invalid tests FAIL against current `src/cli.ts` (octocat
-  leaks); the golden passes. (Build agent runs `bun test` to confirm RED.)
+- Patch (deterministic): — (judgment: new cases)
+- Detail: reuse the detection-ENABLED octocat fixture (`COPILOTLINE_ACCOUNT:"1"`,
+  `COPILOTLINE_USAGE:"1"`, fixture `COPILOT_HOME`, empty PATH, nonexistent VS Code
+  DB). Add cases asserting `stdout.trim()==="copilotline"`, no `octocat`/`credits`/`/\d+%/`,
+  exit 0 for: `{}`, `{"zzz":1}`, `{"foo":"bar"}`, `[]` already covered. Add a POSITIVE
+  case: `{"model":{"displayName":"GPT-5.4"}}` (single recognized key, masked `run()` ok)
+  still renders `GPT-5.4` — guards against over-tightening.
+- Gate: the contentless-object cases FAIL against current `src/cli.ts` (leak octocat);
+  the positive + spec-004 golden pass.
 
-## Phase 2 — GREEN
-
-### T-2 — Discriminate empty vs invalid vs payload in `safeParse`
+### T-2 — GREEN: recognized-payload predicate
 - Agent: build
-- Files: `src/cli.ts:735-745`
-- Principles applied: §10.3 SOLID (single responsibility at the boundary), §10.7 Clean Code
+- Files: `src/cli.ts` (near `safeParse` ~`:786`, and the guard `:139`)
+- Principles applied: §10.3 SOLID, §10.7 Clean Code
 - Patch (deterministic):
   ```diff
-  -function safeParse(raw: string): unknown {
-  -  if (raw.trim() === "") {
-  -    return {};
-  -  }
-  -
-  -  try {
-  -    return JSON.parse(raw) as unknown;
-  -  } catch {
-  -    return {};
-  -  }
-  -}
-  +type ParsedStdin =
-  +  | { kind: "payload"; value: unknown }
-  +  | { kind: "empty" }
-  +  | { kind: "invalid" };
+  +const RECOGNIZED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  +  // Authoritative union of every top-level key read by buildStatusSnapshot,
+  +  // normalizeModel/Context/Quota/Session, quotaFromSnapshots/Headers,
+  +  // accountLoginFromInput, and selectCopilotAccount. UPDATE this whenever a new
+  +  // top-level read path is added to render-status-line.ts / copilot-account.ts.
+  +  "model", "previewModel", "effort", "effort_level", "effortLevel", "reasoning",
+  +  "agent", "mode", "task", "session", "session_id", "sessionId", "cost",
+  +  "context_window", "contextWindow", "context", "cwd", "workingDirectory",
+  +  "workspace", "quota_snapshots", "quotaSnapshots", "copilot_quota_snapshots",
+  +  "copilotQuotaSnapshots", "usage", "response", "event", "headers",
+  +  "quota_headers", "quotaHeaders", "quota", "quota_window", "quotaWindow",
+  +  "quota_reset_date", "quotaResetDate", "quota_reset_date_utc",
+  +  "quotaResetDateUtc", "account", "github", "user", "authentication", "copilot",
+  +]);
   +
-  +function safeParse(raw: string): ParsedStdin {
-  +  if (raw.trim() === "") {
-  +    return { kind: "empty" };
+  +function isRecognizedPayload(value: unknown): boolean {
+  +  const record = asRecord(value);
+  +  if (record === undefined) {
+  +    return false;
   +  }
-  +
-  +  try {
-  +    return { kind: "payload", value: JSON.parse(raw) as unknown };
-  +  } catch {
-  +    return { kind: "invalid" };
+  +  for (const key of Object.keys(record)) {
+  +    if (RECOGNIZED_PAYLOAD_KEYS.has(key)) {
+  +      return true;
+  +    }
   +  }
+  +  return false;
   +}
   ```
-- Gate: `tsc --noEmit` clean (callers updated in T-3).
-
-### T-3 — Guard `runRender`: no host reads without a payload
-- Agent: build
-- Files: `src/cli.ts:129-165`
-- Principles applied: §10.3 SOLID, §10.7 Clean Code, §10.2 YAGNI
-- Patch (deterministic):
+  and the guard:
   ```diff
-     const parsed = safeParse(stdin.raw);
-  -  // Resolve the account once for the whole render; thread it into the
-  -  // cache-only readers so the render path never re-detects (no gh/sqlite3
-  -  // foreground spawns).
-  -  const account = selectCopilotAccount(parsed).selected;
-  -  const usage = quotaForRender(account);
-  -  refreshCopilotUsageInBackground(statusLineCommand(), account);
-  -  const usageConfig = readCopilotlineConfig().usage;
-  -  const snapshot = buildStatusSnapshot(parsed, {
-  -    now: () => Date.now(),
-  -    getGitInfo,
-  -    quota: usage,
-  -  });
-  +
-  +  // No trustworthy payload (empty or unparseable stdin): never detect or read
-  +  // the host Copilot account/quota — emit a neutral, account-free placeholder
-  +  // and exit 0. (spec-004 — PII guard.)
-  +  if (parsed.kind !== "payload") {
-  +    if (parsed.kind === "invalid") {
-  +      process.stderr.write("copilotline: ignoring invalid status JSON on stdin\n");
-  +    }
-  +    if (asJson) {
-  +      process.stdout.write(
-  +        `${JSON.stringify(
-  +          {
-  +            version: VERSION,
-  +            generated_at: new Date().toISOString(),
-  +            truncated_input: stdin.truncated,
-  +            data: null,
-  +          },
-  +          null,
-  +          2,
-  +        )}\n`,
-  +      );
-  +    } else {
-  +      process.stdout.write("copilotline\n");
-  +    }
-  +    return 0;
-  +  }
-  +
-  +  const payload = parsed.value;
-  +  const account = selectCopilotAccount(payload).selected;
-  +  const usage = quotaForRender(account);
-  +  refreshCopilotUsageInBackground(statusLineCommand(), account);
-  +  const usageConfig = readCopilotlineConfig().usage;
-  +  const snapshot = buildStatusSnapshot(payload, {
-  +    now: () => Date.now(),
-  +    getGitInfo,
-  +    quota: usage,
-  +  });
+  -  if (parsed.kind !== "payload") {
+  +  // A parsed object with NO recognized status key (e.g. `{}`, `{"zzz":1}`) is
+  +  // not a real payload — treat it like empty stdin and never read the host
+  +  // account. (spec-005 — closes the spec-004 `{}` boundary.)
+  +  if (parsed.kind !== "payload" || !isRecognizedPayload(parsed.value)) {
   ```
-- Gate: T-1's empty/invalid tests now PASS; golden still passes; `tsc --noEmit` clean.
+- Gate: T-1 contentless cases now PASS; positive + golden pass; `tsc --noEmit` clean.
+  (`bun run build` to refresh dist for the spawnSync tests.)
+
+## Phase 2 — Install demo
+
+### T-3 — Offline `/user` mock for "token ok"
+- Agent: build
+- Files: `docs/fixtures/github-user-mock.mjs` (new)
+- Principles applied: §10.2 YAGNI, §10.7 Clean Code
+- Patch (deterministic): — (judgment: undici intercept)
+- Detail: a `node --import`-able ESM that intercepts `GET https://api.github.com/user`
+  (and `*.ghe.com` if needed) and replies `{ "login": <derived> }` based on the
+  Authorization bearer token, so fabricated per-login tokens verify offline.
+  Map convention: token `demo-<login>` → `{login:"<login>"}` (so `demo-octocat` →
+  octocat). Use undici `MockAgent` + `setGlobalDispatcher` (Node global fetch is
+  undici). Demo-only — never imported by `src/`.
+- Gate: `node --import docs/fixtures/github-user-mock.mjs -e "const r=await fetch('https://api.github.com/user',{headers:{authorization:'Bearer demo-octocat'}}); console.log((await r.json()).login)"`
+  prints `octocat` with no network.
+
+### T-4 — Install-demo seeding + tape
+- Agent: build
+- Files: `docs/fixtures/seed-demo-shell.sh` (extend with an install mode, OR new `seed-install-shell.sh`), `docs/demo-install.tape` (new)
+- Principles applied: §10.4 DRY, §10.7 Clean Code, §10.6 SDD
+- Patch (deterministic): — (judgment)
+- Detail: seed an isolated env that makes `detectCopilotAccounts()` list THREE
+  fabricated accounts: `COPILOT_HOME/config.json` → octocat; a VS Code
+  `state.vscdb` (via `sqlite3`) with `__GitHub.copilot-chat-monalisa` +
+  `__GitHub.copilot-chat-hubot` rows; a `gh` stub exiting 1; `COPILOTLINE_CONFIG_DIR`
+  → temp. Set per-login tokens `COPILOTLINE_GITHUB_TOKEN_{OCTOCAT,MONALISA,HUBOT}=demo-<login>`.
+  The `copilotline` shim runs `node --import <repo>/docs/fixtures/github-user-mock.mjs $DEMO/cli.js "$@"`
+  and does NOT append `--no-account` (so `install` shows the picker). `env.sh`
+  exports all of it. The tape: `source $CL_DEMO/env.sh`, then `Type "copilotline install"` Enter,
+  Sleep for the box+picker, `Type "1"` (or Enter to keep) at the `Select` prompt,
+  Sleep, 5s hold. Pixel-tight canvas via the `magick -trim` loop. `Output "docs/demo-install.gif"`.
+  If the mock fails to yield "token ok", proceed with honest "token missing" markers.
+- Gate: `vhs validate` passes; the rendered final frame shows the picker with
+  octocat/monalisa/hubot and a selection confirmation; only fabricated logins +
+  `/tmp` paths appear.
+
+### T-5 — Render + wire into the regen wrapper
+- Agent: build
+- Files: `docs/fixtures/render-demos.sh` (add a `render_one "docs/demo-install.tape" "/tmp/copilotline-demo-install"`), `docs/demo-install.gif` (new, generated)
+- Principles applied: §10.4 DRY
+- Patch (deterministic): — (judgment: bash wiring)
+- Detail: extend the wrapper to seed (install mode) + render the install demo.
+  Run it to produce `docs/demo-install.gif`. Verify non-trivial size + PII-free.
+- Gate: `bash docs/fixtures/render-demos.sh` produces all three GIFs; install gif exists.
+
+### T-6 — README + DEMOS.md
+- Agent: build
+- Files: `README.md`, `docs/DEMOS.md`
+- Principles applied: §10.7 Clean Code
+- Patch (deterministic): — (judgment: docs prose)
+- Detail: reference `docs/demo-install.gif` in the README (Install or Demo section)
+  with a caption ("first-run account picker"). Document regenerating it in
+  `docs/DEMOS.md` (incl. the `github-user-mock.mjs` + multi-account seeding + the
+  honest-fallback note). Hero + statusline/doctor demos unchanged.
+- Gate: links resolve; README command parity preserved; no `--capture`.
 
 ## Phase 3 — Document + verify
 
-### T-4 — CHANGELOG entry
+### T-7 — CHANGELOG
 - Agent: build
 - Files: `CHANGELOG.md`
-- Principles applied: §10.7 Clean Code, CLAUDE.md §13 rule 3 (document behavior change)
-- Patch (deterministic): — (judgment: changelog prose under `## [Unreleased]`)
-- Detail: `Fixed` — `copilotline render` no longer reads or renders the host
-  Copilot account/quota when stdin is empty or not valid JSON; it now prints a
-  neutral `copilotline` placeholder (exit 0) and, for invalid JSON, a stderr
-  diagnostic. Note the `render --json` empty/invalid envelope now has `data: null`.
-- Gate: CHANGELOG parses; entry present.
+- Principles applied: §10.7 Clean Code
+- Patch (deterministic): — (judgment)
+- Detail: `## [Unreleased]` — `Fixed`/`Security`: render no longer reads the host
+  account for a contentless/unrecognized JSON object (closes the spec-004 `{}`
+  boundary). `Added`/`Changed`: install-wizard demo GIF.
+- Gate: parses.
 
-### T-5 — Terminal verification
+### T-8 — Terminal verification
 - Agent: verify
 - Files: repo (read-only)
 - Principles applied: §10.5 TDD, §10.6 SDD
 - Patch (deterministic): —
-- Detail: `bun test` (all green incl. new no-leak tests), `tsc --noEmit` clean.
-  Manual repro evidence: `printf '' | node dist/cli.js render` → exactly
-  `copilotline`, exit 0, no login/quota; `printf 'x' | node dist/cli.js render`
-  → `copilotline` + stderr diagnostic; a valid payload still renders the full
-  ribbon. Confirm no `--capture`/behavior regressions elsewhere.
-- Gate: all pass; report evidence. Maps AC-1..AC-7.
+- Detail: `bun test` green (incl. contentless-object no-leak + positive); `tsc
+  --noEmit` clean; `gitleaks detect --no-git --source docs` clean; `strings
+  docs/demo-install.gif | grep -iE 'soydachi|/Users/|ghp_(?!octocat)|token'`
+  shows only fabricated octocat/monalisa/hubot; manual repro `printf '{}' | node
+  dist/cli.js render` → `copilotline` (NEVER a real account); `printf
+  '{"model":{"displayName":"GPT-5.4"}}' | …` → renders. Maps AC-1..AC-6.
+- Gate: all pass; report evidence.
 
 ---
 
 ## Phase ordering
 
-T-1 (RED) → T-2 + T-3 (GREEN, same file `src/cli.ts`; T-2 then T-3) → T-4 (CHANGELOG) → T-5 (verify). All automatable by `/ai-build`; no manual steps.
+T-1 (RED) → T-2 (GREEN) → T-3 (mock) → T-4 (seed+tape) → T-5 (render) → T-6 (docs)
+→ T-7 (CHANGELOG) → T-8 (verify). T-3 before T-4 (tape needs the mock). All
+automatable by `/ai-build`; no manual steps (mock has an honest in-build fallback).
 
 ## Quality Remediation
 
 used: true
 max_attempts: 1
-Finding (review, HIGH, empirically reproduced): `safeParse` classified ANY
-`JSON.parse` success as `payload`, so a valid-but-non-object JSON (`null`, `5`,
-`true`, `[]`, `"x"`, whitespace-padded primitive) bypassed the guard and still
-leaked the host account (`printf '5' | render` → `…octocat credits 42% 84/200`).
-Same leak class spec-004 must close. Mechanical, finding-scoped fix: gate the
-`payload` kind on the domain's own `asRecord(value)` (value-reader.ts) so a
-parsed non-object is classified `invalid` (guarded branch, no host read). Plus
-F2: add no-leak tests for `null`/`[]`/`5`.
+Quality loop: verify 98/100 PASS + review PASS (0 blocker/critical/high), but 2
+MEDIUM. Electing to close both (F1 is the same host-account leak class the user
+asked to harden; shipping it would miss intent — a deliberate content-aware
+refinement of D-005-01 Approach A):
+- F1 (security): a recognized key with an EMPTY value (`{"model":{}}`,
+  `{"account":{}}`, `{"cwd":""}`) passed the name-only predicate and still read
+  the host account. Fix: predicate requires ≥1 recognized key with a MEANINGFUL
+  value (non-null; object/array non-empty; string non-blank; number/boolean ok).
+- F2 (correctness): add top-level `request` to the key set and accept a flat
+  `x-quota-snapshot-*` header bag, so real header-only payloads aren't wrongly
+  rejected. Update the constant's comment to stop overclaiming completeness.
+Plus tests pinning: empty-valued recognized keys → placeholder/no-leak;
+`{"context_window":{"used_percent":0}}` / `{"request":{"headers":{…}}}` →
+render (no over-tightening).
 
 ## Quality Outcome
 
-Initial assessment: verify 98/100 PASS, but adversarial review found **1 HIGH**
-(F1: non-object JSON — `null`/`5`/`true`/`[]`/`"x"`/whitespace-primitive — bypassed
-the `payload` discriminant and empirically leaked the octocat fixture account).
-One bounded remediation pass: gated `safeParse`'s `payload` kind on `asRecord(value)`
-so a parsed non-object routes to `invalid` (guarded). Added 4 no-leak tests.
+Initial assessment: verify 98/100 PASS + review PASS, with 2 MEDIUM (F1 empty-valued
+recognized key still leaked; F2 `request`/`x-quota-snapshot-*` wrongly rejected).
+One bounded remediation pass made `isRecognizedPayload` content-aware
+(`isMeaningfulValue` + header-bag pattern + `request` key).
 **Final reassessment → 0 blockers / 0 criticals / 0 highs → PASS.**
-- Re-review (adversarial, built + ran the binary): F1 closed across the full
-  non-object/empty/garbage matrix; guard ordering + all entry points + `--json`
-  confirmed; golden unregressed.
-- Deterministic gates: `bun test` 93 pass / 0 fail; `tsc --noEmit` clean;
-  `gitleaks protect --staged` clean; source scope = `src/cli.ts` only.
-- Known boundary (INFO, by-design per D-004-01): a literal `{}` / sparse object
-  still takes the payload branch and reads the host account — outside the
-  accidental empty/garbage leak vector this spec closes (Approach C, requiring
-  specific keys, was explicitly rejected). Candidate future hardening, not a blocker.
+- Re-review (built + empirical): F1 closed (`{"model":{}}`/`{"account":{}}`/`{"cwd":""}`/
+  `{}`/`{"zzz":1}` → placeholder, no host read); NO over-tightening (model/0%/header-bag/
+  session/cwd minimal payloads all render); caller-supplied `{"account":{"login":"x"}}`
+  does NOT leak the host account; demo+mock unaffected.
+- Deterministic: `bun test` 104 pass / 0 fail; `tsc --noEmit` clean; gitleaks clean;
+  source scope = `src/cli.ts` only; only `docs/demo-install.gif` added among gifs.
+- By-design (not a finding): a REAL payload (recognized key with content, no account
+  field) still surfaces the host quota — that is the core enrichment feature, identical
+  to main; only contentless/empty inputs are guarded.
 
 final_reassessment: pass
 
 ## Acceptance criteria mapping
 
-AC-1/AC-2/AC-4 → T-1 + T-3. AC-3 (golden) → T-1 + T-3. AC-5 (bare invocation) → shares the guarded `runRender` (T-3). AC-6 (no masking) → T-1 fixture design. AC-7 → T-5.
+AC-1/AC-3 → T-1+T-2. AC-2 → T-1 positive + spec-004 golden. AC-4 → T-3/T-4/T-5.
+AC-5 → T-6. AC-6 → T-8.

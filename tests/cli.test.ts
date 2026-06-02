@@ -469,3 +469,126 @@ describe("render no-leak guard (spec-004)", () => {
     expect(result.stdout).toContain("12%");
   });
 });
+
+describe("render contentless-object no-leak guard (spec-005)", () => {
+  // A successful JSON.parse of an OBJECT that carries NO recognized status key
+  // (`{}`, `{"zzz":1}`, `{"foo":"bar"}`) is valid JSON but is NOT a real status
+  // payload. spec-004 left these flowing to selectCopilotAccount (the `{}`
+  // boundary), leaking the host Copilot account + quota. spec-005 closes it:
+  // they must route down the placeholder branch with detection ENABLED.
+  test.each([
+    ["empty object", "{}"],
+    ["unrelated single key", '{"zzz":1}'],
+    ["unrelated string key", '{"foo":"bar"}'],
+  ])(
+    "contentless object (%s) renders neutral placeholder without leaking the account",
+    (_label, stdin) => {
+      const fixture = makeLeakFixture();
+
+      try {
+        const result = runNoLeak(["render"], fixture, { stdin });
+
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe("copilotline");
+        expect(result.stdout).not.toContain(FIXTURE_LOGIN);
+        expect(result.stdout).not.toContain("credits");
+        expect(result.stdout).not.toMatch(/\d+%/);
+        // A contentless object is valid JSON, so it must NOT emit the
+        // invalid-JSON stderr diagnostic (that stays reserved for parse
+        // failures, D-005-02).
+        expect(result.stderr).not.toMatch(/invalid/i);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  test("a single recognized top-level key is NOT rejected (positive)", () => {
+    // `{"model":{...}}` carries one recognized key, so it is a real payload and
+    // must render the model segment — guards against over-tightening the gate.
+    const result = run([], {
+      stdin: JSON.stringify({ model: { displayName: "GPT-5.4" } }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("GPT-5.4");
+  });
+
+  // A recognized key NAME with an EMPTY value (`{"model":{}}`, `{"cwd":""}`,
+  // `{"context_window":{}}`) is contentless: the name-only spec-005 check
+  // accepted it, so it reached selectCopilotAccount and leaked the host
+  // Copilot account + quota. The content-aware predicate must route these down
+  // the placeholder branch with detection ENABLED.
+  test.each([
+    ["empty object model", '{"model":{}}'],
+    ["empty object account", '{"account":{}}'],
+    ["empty string cwd", '{"cwd":""}'],
+    ["empty object context_window", '{"context_window":{}}'],
+  ])(
+    "recognized key with empty value (%s) renders neutral placeholder without leaking the account",
+    (_label, stdin) => {
+      const fixture = makeLeakFixture();
+
+      try {
+        const result = runNoLeak(["render"], fixture, { stdin });
+
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe("copilotline");
+        expect(result.stdout).not.toContain(FIXTURE_LOGIN);
+        expect(result.stdout).not.toContain("credits");
+        expect(result.stdout).not.toMatch(/\d+%/);
+        // An empty-valued recognized key is valid JSON, so it must NOT emit the
+        // invalid-JSON stderr diagnostic (D-005-02).
+        expect(result.stderr).not.toMatch(/invalid/i);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  test("zero is a meaningful value: used percent 0 still renders (positive)", () => {
+    // `{"context_window":{"usedPercent":0}}` carries a real, meaningful value:
+    // numeric 0 must NOT be treated as contentless, or a fresh-session context
+    // window would wrongly route to the placeholder branch. `usedPercent` is a
+    // field normalizeContext actually reads, so the 0% segment must render.
+    const result = run([], {
+      stdin: JSON.stringify({ context_window: { usedPercent: 0 } }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("0%");
+  });
+
+  // F2 (correctness): quotaFromHeaders reads the top-level `request` key
+  // (request.headers) and a flat `x-quota-snapshot-*` header bag. Neither was
+  // accepted by the name-only spec-005 check, so real read paths were wrongly
+  // rejected as contentless → placeholder. The content-aware predicate must
+  // accept both shapes and render the parsed quota.
+  test.each([
+    [
+      "request.headers bag",
+      JSON.stringify({
+        request: {
+          headers: {
+            "x-quota-snapshot-premium_models": "unit=premium&rem=40&ent=300",
+          },
+        },
+      }),
+    ],
+    [
+      "flat header bag",
+      JSON.stringify({
+        "x-quota-snapshot-premium_models": "unit=premium&rem=40&ent=300",
+      }),
+    ],
+  ])("header-only payload (%s) renders a quota (positive)", (_label, stdin) => {
+    const result = run([], { stdin });
+
+    expect(result.status).toBe(0);
+    // quotaFromHeaderValue parses rem=40 → remainingPercent 40, so usedPercent
+    // inverts to 60: the ribbon must show a real quota percentage, never the
+    // bare `copilotline` placeholder.
+    expect(result.stdout.trim()).not.toBe("copilotline");
+    expect(result.stdout).toMatch(/\d+%/);
+  });
+});
