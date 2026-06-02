@@ -1,22 +1,30 @@
 # copilotline doctor demo (charmbracelet VHS)
 #
-# Renders `copilotline doctor` from the REAL copilotline binary in a fully
-# isolated, deterministic, PII-free environment: account detection and live
-# usage are disabled, COPILOT_HOME and the cache dir point at an anonymous temp
-# tree, and a public-safe `copilot` stub supplies a fixed version banner. No
-# network, no token, no real account, and no machine-specific paths appear.
+# Shows the freshly-installed experience end to end: first `copilotline install`
+# (writes the statusLine entry into the isolated demo settings.json), then
+# `copilotline doctor` running the REAL copilotline binary to print the
+# diagnostics report as green as honestly possible. Everything runs against a
+# public-safe, offline, fully anonymized harness -- no network, no GitHub token,
+# no real account. PII-free by construction.
 #
-# All of that plumbing lives in the Hidden block below, including a
-# `copilotline` shell function that maps the clean command onto
-# `node dist/cli.js` with the demo-only env. After Show, the only text typed on
-# screen is the clean, installed-experience command:
+# All of the demo plumbing lives in the Hidden block below and is built by the
+# committed helper docs/fixtures/seed-demo-harness.mjs (an anonymized demo root
+# under /tmp, a copy of the built dist/cli.js at $DEMO/cli.js so the path written
+# into settings.json is the anonymized /tmp path, a `copilotline` shim on PATH
+# whose `install` runs non-interactively via --no-account, a `gh` stub so no host
+# account leaks, a public-safe `copilot` version stub, the fabricated `octocat`
+# account + offline credits cache). After Show, the only text typed on screen is
+# the clean, installed-experience sequence:
 #
+#   copilotline install
 #   copilotline doctor
 #
-# Because `copilotline` is a shell function (not a file on PATH), the doctor
-# subprocess does NOT see it on PATH -- so the report honestly shows the
-# freshly-installed "copilotline command not found on PATH" line while the
-# typed command still reads exactly like the installed experience.
+# After install the report is green for Environment (copilotline/copilot/git on
+# PATH, Node), Configuration (settings written, statusLine.command wired to the
+# anonymized /tmp path, footer.showCustom enabled), and Account (octocat
+# detected, mode auto, AI-credits billing). The single honest WARN is the quota
+# token check: validating a token needs the network, so the demo never fabricates
+# one -- that check stays an honest warn rather than faking credentials.
 #
 # Run from the repository root, after `bun run build`:
 #   vhs docs/demo-cli.tape
@@ -31,9 +39,9 @@ Require git
 
 Set Shell "bash"
 Set FontSize 18
-Set Width 1280
-Set Height 760
-Set Padding 18
+Set Width 1844
+Set Height 650
+Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 12ms
 
@@ -41,39 +49,40 @@ Set TypingSpeed 12ms
 Hide
 
 Type "REPO=$PWD" Enter
-
-# Fixed temp base -> identical anonymous paths on every machine.
 Type "DEMO=/tmp/copilotline-demo-cli" Enter
-Type "rm -rf $DEMO && mkdir -p $DEMO/bin $DEMO/home/.copilot $DEMO/cache $DEMO/work/copilotline" Enter
+Type "rm -r $DEMO 2>/dev/null; mkdir -p $DEMO" Enter
 
-# Curated PATH: only node + git + a public-safe copilot stub. The real
-# copilotline binary is deliberately absent so doctor shows the honest
-# "freshly installed, not yet wired" view with no machine-specific command path.
-Type "ln -sf $(command -v node) $DEMO/bin/node" Enter
-Type "ln -sf $(command -v git) $DEMO/bin/git" Enter
-Type "cp $REPO/docs/fixtures/copilot-shim.sh $DEMO/bin/copilot && chmod +x $DEMO/bin/copilot" Enter
+# Build the entire anonymized, offline harness via the committed helper.
+Type "node $REPO/docs/fixtures/seed-demo-harness.mjs $REPO $DEMO" Enter
 
-# Enter the throwaway work dir so doctor reports from a neutral, anonymized cwd.
+# A throwaway git repo named 'copilotline' on branch 'main' so the directory +
+# branch segment in the synthetic render preview is deterministic.
+Type "git -C $DEMO/work/copilotline init -q -b main" Enter
+Type "git -C $DEMO/work/copilotline -c user.email=demo@example.com -c user.name=demo commit -q --allow-empty -m init" Enter
+
+# Run doctor from the throwaway repo so its cwd is a neutral, anonymized path.
 Type "cd $DEMO/work/copilotline" Enter
 
-# Define `copilotline` as a shell function that drives the REAL dist/cli.js with
-# the demo-only env hidden off screen: a curated PATH (node + git + copilot
-# stub only, so `copilotline` itself is NOT on PATH), disabled account
-# detection and live usage, and an anonymous COPILOT_HOME/cache dir. The
-# function is invisible to the doctor subprocess, so the report stays the
-# honest freshly-installed view.
-Type `copilotline() { PATH=$DEMO/bin COPILOTLINE_ACCOUNT=0 COPILOTLINE_USAGE=0 COPILOT_HOME=$DEMO/home/.copilot COPILOTLINE_CACHE_DIR=$DEMO/cache node $REPO/dist/cli.js "$@"; }` Enter
+# Prepend $DEMO/bin (copilotline shim + gh/copilot stubs) so the shim wins on
+# PATH while coreutils stay available. Isolated COPILOT_HOME + cache dir + a
+# nonexistent VS Code state DB keep doctor offline, deterministic, and PII-free.
+Type "export PATH=$DEMO/bin:$PATH COPILOT_HOME=$DEMO/copilot COPILOTLINE_CACHE_DIR=$DEMO/cache COPILOTLINE_VSCODE_STATE_DB=$DEMO/nope" Enter
 
 Type "clear" Enter
 Show
 
-# --- Visible: the clean, installed-experience diagnostics ---
-Type "copilotline doctor"
-Sleep 700ms
+# --- Visible: install, then the clean installed-experience diagnostics ---
+Type "copilotline install"
+Sleep 500ms
 Enter
-Sleep 4500ms
+Sleep 1500ms
+
+Type "copilotline doctor"
+Sleep 500ms
+Enter
+Sleep 5s
 
 # --- Hidden teardown ---
 Hide
-Type "cd $REPO && rm -rf $DEMO" Enter
+Type "cd $REPO && rm -r $DEMO" Enter
 Show
