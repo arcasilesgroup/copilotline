@@ -69,6 +69,19 @@ Usage:
   copilotline --version                   Show version
 `;
 
+// Shown when `render` is run by hand in a terminal (stdin is a TTY, so there is
+// no piped status payload). Pointer text, not an error — `render` is invoked by
+// GitHub Copilot CLI, not by the user.
+const RENDER_INTERACTIVE_HINT = `copilotline render reads Copilot status JSON from stdin.
+GitHub Copilot CLI runs it for you via statusLine.command — there is nothing to
+render when you run it by hand, and it would otherwise wait forever for input.
+
+Try it with a piped payload:
+  echo '{"model":{"name":"Copilot"}}' | copilotline render
+
+Run \`copilotline install\` to wire it into Copilot CLI, or \`copilotline --help\` for usage.
+`;
+
 async function main(): Promise<number> {
   const command = process.argv[2];
 
@@ -129,6 +142,19 @@ async function main(): Promise<number> {
 
 async function runRender(args: string[]): Promise<number> {
   const asJson = args.includes("--json");
+
+  // `render` is a statusline command: Copilot CLI pipes a status JSON payload on
+  // stdin. Run by hand in a terminal there is no pipe, so stdin is the TTY and
+  // the read below would block forever waiting for an EOF that never arrives.
+  // Detect the interactive TTY, point the user at the right usage, and exit
+  // instead of hanging. Copilot CLI always pipes, so it never reaches this
+  // branch. (stdin-only check — also covers `copilotline render > file`, where
+  // stdout is redirected but stdin is still the terminal.)
+  if (process.stdin.isTTY) {
+    process.stderr.write(RENDER_INTERACTIVE_HINT);
+    return 0;
+  }
+
   const stdin = await readStandardInput();
 
   const parsed = safeParse(stdin.raw);
