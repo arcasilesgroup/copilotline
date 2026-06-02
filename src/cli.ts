@@ -136,7 +136,11 @@ async function runRender(args: string[]): Promise<number> {
   // No trustworthy payload (empty or unparseable stdin): never detect or read
   // the host Copilot account/quota — emit a neutral, account-free placeholder
   // and exit 0. (spec-004 — PII guard.)
-  if (parsed.kind !== "payload") {
+  //
+  // A parsed object with NO recognized status key (e.g. `{}`, `{"zzz":1}`) is
+  // not a real payload — treat it like empty stdin and never read the host
+  // account. (spec-005 — closes the spec-004 `{}` boundary.)
+  if (parsed.kind !== "payload" || !isRecognizedPayload(parsed.value)) {
     if (parsed.kind === "invalid") {
       process.stderr.write(
         "copilotline: ignoring invalid status JSON on stdin\n",
@@ -767,6 +771,104 @@ type ParsedStdin =
   | { kind: "payload"; value: unknown }
   | { kind: "empty" }
   | { kind: "invalid" };
+
+const RECOGNIZED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  // The set of recognized top-level keys read by buildStatusSnapshot,
+  // normalizeModel/Context/Quota/Session, quotaFromSnapshots/Headers,
+  // accountLoginFromInput, and selectCopilotAccount. This is NOT the
+  // exhaustive authoritative union: header-bag payloads (`x-quota-snapshot-*`)
+  // are matched separately in isRecognizedPayload. Keep this in sync with the
+  // render/account read paths in render-status-line.ts / copilot-account.ts.
+  "model",
+  "previewModel",
+  "effort",
+  "effort_level",
+  "effortLevel",
+  "reasoning",
+  "agent",
+  "mode",
+  "task",
+  "session",
+  "session_id",
+  "sessionId",
+  "cost",
+  "context_window",
+  "contextWindow",
+  "context",
+  "cwd",
+  "workingDirectory",
+  "workspace",
+  "quota_snapshots",
+  "quotaSnapshots",
+  "copilot_quota_snapshots",
+  "copilotQuotaSnapshots",
+  "usage",
+  "response",
+  "request",
+  "event",
+  "headers",
+  "quota_headers",
+  "quotaHeaders",
+  "quota",
+  "quota_window",
+  "quotaWindow",
+  "quota_reset_date",
+  "quotaResetDate",
+  "quota_reset_date_utc",
+  "quotaResetDateUtc",
+  "account",
+  "github",
+  "user",
+  "authentication",
+  "copilot",
+]);
+
+// A recognized key carries content only when its value is meaningful: a
+// name-only match (e.g. `{"model":{}}`) is contentless and must route down the
+// placeholder branch, never reaching selectCopilotAccount (spec-005 leak class).
+// Numeric 0 and boolean false ARE meaningful (e.g. used_percent: 0); empty
+// object/array, empty/whitespace string, and null/undefined are NOT.
+function isMeaningfulValue(v: unknown): boolean {
+  if (v === null || v === undefined) {
+    return false;
+  }
+  if (Array.isArray(v)) {
+    return v.length > 0;
+  }
+  if (typeof v === "object") {
+    return Object.keys(v).length > 0;
+  }
+  if (typeof v === "string") {
+    return v.trim().length > 0;
+  }
+  // number (incl 0) and boolean (incl false) are meaningful.
+  return true;
+}
+
+// Flat header-bag keys (e.g. `{"x-quota-snapshot-premium_models":"..."}`) are
+// read by quotaFromHeaders via its `?? asRecord(input)` top-level fallback, but
+// are not in RECOGNIZED_PAYLOAD_KEYS, so they are matched by pattern here.
+const QUOTA_HEADER_KEY_PATTERN = /^x-quota-snapshot-/i;
+
+function isRecognizedPayload(value: unknown): boolean {
+  const record = asRecord(value);
+  if (record === undefined) {
+    return false;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (RECOGNIZED_PAYLOAD_KEYS.has(key) && isMeaningfulValue(entry)) {
+      return true;
+    }
+    if (
+      QUOTA_HEADER_KEY_PATTERN.test(key) &&
+      typeof entry === "string" &&
+      entry.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function safeParse(raw: string): ParsedStdin {
   if (raw.trim() === "") {

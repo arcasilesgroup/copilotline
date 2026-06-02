@@ -1,7 +1,7 @@
 # Regenerating the README demos
 
-The README hero is a static screenshot; the two demo GIFs are short clips. All
-three are generated from the **real `copilotline` CLI output** (the GIFs via
+The README hero is a static screenshot; the three demo GIFs are short clips. All
+four are generated from the **real `copilotline` CLI output** (the GIFs via
 [charmbracelet VHS](https://github.com/charmbracelet/vhs)), so they can never
 silently drift from shipped behavior:
 
@@ -13,6 +13,11 @@ silently drift from shipped behavior:
 - `docs/demo-cli.gif` — a `copilotline doctor` report that is green for
   Environment, Configuration, and Account (the real `dist/cli.js doctor`) in a
   fully isolated, anonymized environment.
+- `docs/demo-install.gif` — the real first-run `copilotline install` flow: it
+  wires the statusline, then runs the interactive **"Choose quota account"**
+  picker listing **three fabricated accounts** (`octocat` / `monalisa` /
+  `hubot`), and shows a selection. See
+  [The install-wizard demo](#the-install-wizard-demo) below.
 
 The committed assets are the source of truth between regenerations. Regeneration
 is a manual maintainer step; CI does not render the demos (VHS needs a TTY plus
@@ -29,6 +34,11 @@ step on screen — the install runs off screen as part of setup, see below):
     (`$PAYLOAD` is the public-safe status payload, loaded off screen).
 - `docs/demo-cli.gif`:
   - `copilotline doctor` — prints the diagnostics report.
+- `docs/demo-install.gif`:
+  - `copilotline install` — wires the statusline and then runs the interactive
+    account picker; the demo types a selection (`3` → `monalisa`) so the
+    confirmation line is shown. This is the one demo that DOES type `copilotline
+    install` on screen, because the install picker is the whole point.
 
 All of the demo plumbing is built OFF screen, before VHS runs, by the wrapper
 `docs/fixtures/render-demos.sh` (which calls `docs/fixtures/seed-demo-shell.sh`
@@ -143,21 +153,81 @@ ImageMagick 7 (`magick`) is used to verify the canvas fits the content.
 Run from the repository root. Use the wrapper — **not** bare `vhs` — because the
 wrapper builds the harness off screen (see [Why setup runs off
 screen](#why-setup-runs-off-screen-do-not-type-it-in-the-tape)). It builds the
-bundle, then renders both tapes:
+bundle, then renders all three tapes:
 
 ```bash
 bash docs/fixtures/render-demos.sh
 ```
 
-Each tape writes its GIF to `docs/demo-*.gif` (the `Output` path is resolved
-relative to the directory you invoke `vhs` from — i.e. the repo root — not the
-tape's own directory). The new GIFs replace the committed ones in place; their
-filenames are stable so the README `raw.githubusercontent.com` image URLs keep
-working.
+The statusline and doctor tapes write their GIF to `docs/demo-*.gif` (the
+`Output` path is resolved relative to the directory you invoke `vhs` from — i.e.
+the repo root — not the tape's own directory). The install tape renders into the
+isolated `/tmp` root and the wrapper trims it into `docs/demo-install.gif` (see
+[The install-wizard demo](#the-install-wizard-demo)). The new GIFs replace the
+committed ones in place; their filenames are stable so the README
+`raw.githubusercontent.com` image URLs keep working.
 
 > Running `vhs docs/demo-statusline.tape` directly will fail: the tape expects
 > `$CL_DEMO` to be set and `$CL_DEMO/env.sh` to exist, both of which the wrapper
 > provides.
+
+## The install-wizard demo
+
+`docs/demo-install.gif` shows the real first-run experience: `copilotline
+install` wires the statusline into `settings.json` and then runs the
+interactive "Choose quota account" picker. To make the picker meaningful it
+needs multiple accounts to choose from, so this demo seeds a different harness
+than the other two.
+
+Two install-only helpers layer together:
+
+- **`docs/fixtures/seed-install-shell.sh`** — the off-screen setup for the
+  install demo (parallels `seed-demo-shell.sh`). It runs the install harness
+  below, sanity-checks that exactly the three fabricated accounts are detected
+  (failing loud if a real account could leak), and writes `$CL_DEMO/env.sh`
+  (the `cd` + isolated env exports + the per-login tokens) for the tape to
+  `source`.
+- **`docs/fixtures/seed-install-harness.mjs`** — the file writer. Alongside the
+  anonymized `cli.js` copy and the `gh` stub (exits non-zero, no host leak), it
+  seeds three fabricated accounts: `octocat` from `<demo>/copilot/config.json`
+  (the Copilot CLI config account, which becomes the `auto`/system account), and
+  `monalisa` + `hubot` from a VS Code `globalStorage` SQLite DB at
+  `<demo>/vscode/state.vscdb` (built via `sqlite3` with
+  `__GitHub.copilot-chat-monalisa` and `__GitHub.copilot-chat-hubot` rows). The
+  `copilotline` shim runs the bundle under the offline `/user` mock preload
+  (below) and, unlike the other demos' shim, does not append `--no-account` — so
+  `install` shows the picker under VHS's real TTY.
+
+### "token ok" via an offline `/user` mock
+
+The picker marks an account `token ok` only after the CLI verifies a token
+against the GitHub `/user` endpoint (`src/infrastructure/copilot-account.ts`),
+which normally needs the network and a real token. To keep the demo offline and
+PII-free, `docs/fixtures/github-user-mock.mjs` is a demo-only preload (loaded by
+the shim) that answers that one endpoint locally, returning the login derived
+from the bearer token by the convention `demo-<login>` for login `<login>`.
+
+`seed-install-shell.sh` exports the matching fabricated tokens (one per login,
+all of the form `demo-<login>`), so each fabricated account verifies "token ok"
+with no network, no real token, and no change to production token verification.
+The live CLI keeps verifying tokens for real; the mock lives only under
+`docs/fixtures/` and is never imported by `src/`. The mock file's header comment
+carries a one-line self-test that prints `octocat` offline.
+
+**Honest fallback.** If a future Node change breaks the local answer against the
+bundled CLI, the mock simply stops upgrading the markers and the picker shows
+honest `token missing` instead — the multi-account picker (the actual
+requirement) still renders. Re-confirm "token ok" with the mock's self-test
+after a Node upgrade.
+
+### Pixel-tight canvas for the install demo
+
+Unlike the other two tapes (which size `Set Width`/`Set Height` to the content),
+the install tape renders into a generous canvas and the wrapper's
+`render_install` function trims it pixel-tight afterwards with ImageMagick: it
+crops every animation frame to the bounding box of the final held frame (which
+carries the full picker plus the selection confirmation) and re-pads with a
+uniform ~24px border. The current converged size is `986x462`.
 
 ## The static hero screenshot
 
@@ -230,5 +300,8 @@ Regenerate whenever the **visible output changes**:
   regenerate `docs/demo-statusline.gif` and `docs/screenshot.png`.
 - the `copilotline doctor` report changes (a section, line, or label) →
   regenerate `docs/demo-cli.gif`.
+- the `copilotline install` flow or the account picker layout changes (the
+  account box, the "Choose quota account" options, or the selection
+  confirmation) → regenerate `docs/demo-install.gif`.
 
 There is no need to regenerate for changes that do not alter rendered output.

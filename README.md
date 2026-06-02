@@ -144,9 +144,10 @@ copilotline uninstall
 
 ## Demo
 
-Both clips are generated from the **real CLI output** (see
-[docs/DEMOS.md](docs/DEMOS.md)), against an offline, anonymized `octocat`
-fixture — no network, no token, no real account.
+All clips are generated from the **real CLI output** (see
+[docs/DEMOS.md](docs/DEMOS.md)), against offline, anonymized fixtures (the
+mascot logins `octocat` / `monalisa` / `hubot`) — no network, no token, no
+real account.
 
 The statusline ribbon, rendered from a sample Copilot status payload:
 
@@ -156,6 +157,11 @@ The statusline ribbon, rendered from a sample Copilot status payload:
 wired up correctly:
 
 ![copilotline doctor diagnostics](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-cli.gif)
+
+The first-run account picker: `copilotline install` wires the statusline, then
+asks which Copilot account's quota the `💸` segment should follow:
+
+![copilotline install first-run account picker](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-install.gif)
 
 ## Commands
 
@@ -395,9 +401,10 @@ After a build, smoke-test the binary with the read-only diagnostics:
 node dist/cli.js doctor
 ```
 
-The README hero (`docs/screenshot.png`) and the two demo GIFs
-(`docs/demo-statusline.gif`, `docs/demo-cli.gif`) are generated from the real
-CLI output with [charmbracelet VHS](https://github.com/charmbracelet/vhs). See
+The README hero (`docs/screenshot.png`) and the three demo GIFs
+(`docs/demo-statusline.gif`, `docs/demo-cli.gif`, `docs/demo-install.gif`) are
+generated from the real CLI output with
+[charmbracelet VHS](https://github.com/charmbracelet/vhs). See
 [docs/DEMOS.md](docs/DEMOS.md) to regenerate them.
 
 ## Release
