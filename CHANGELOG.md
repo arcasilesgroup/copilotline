@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- README rewritten newcomer-first (inverted pyramid: what + why → demo → a zero-prerequisite "See it in 60 seconds" trial → install → prerequisites → configure → command reference → usage → privacy → troubleshooting → development → release). Folded in factual corrections to match the shipped `v0.2.x` CLI: the canonical `account` command (`--auto` / `--set <login>` / `--json`) replaces the `accounts` / `use` alias-as-primary presentation; the JSONC text now describes the v0.2.0 surgical edit (comments preserved, `.bak` fallback); the removed `render --capture` flag and the stale `v0.1.0` installer example are gone; and the GitHub Copilot CLI prerequisite, Node ≥18, the `gh auth` quota prerequisite, the `~/.local/bin` PATH note, and an `npx` zero-install path are documented.
+- Demo pipeline migrated from Remotion to [charmbracelet VHS](https://github.com/charmbracelet/vhs). The README demo GIFs are now generated from the **real CLI output** by `.tape` scripts (`docs/demo-statusline.tape`, `docs/demo-cli.tape`) driving `node dist/cli.js`, with public-safe offline fixtures under `docs/fixtures/` and a regeneration guide at `docs/DEMOS.md`. GIF filenames are unchanged (`docs/demo-statusline.gif`, `docs/demo-cli.gif`).
+
+### Removed
+
+- The `docs/remotion/` project (React + webpack + `@remotion/*`) and its lockfile, eliminating a heavyweight demo toolchain and its recurring transitive-CVE maintenance surface. Replaced by VHS `.tape` scripts (see above).
+
+> Note: the npm-page README only refreshes on the next publish; the GitHub-rendered README and the raw-served GIFs update on merge to `main`.
+
 ## [0.2.1] - 2026-06-02
 
 ### Fixed

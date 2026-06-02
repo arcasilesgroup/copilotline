@@ -6,41 +6,58 @@
 [![Security](https://github.com/arcasilesgroup/copilotline/actions/workflows/security.yml/badge.svg)](https://github.com/arcasilesgroup/copilotline/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Cross-platform statusline companion for GitHub Copilot CLI.
-
-`copilotline` is a third-party tool that plugs into GitHub Copilot CLI's
-`statusLine.command` setting. It renders a compact statusline with model,
-reasoning effort, context usage, Git state, session duration, and best-effort
-Copilot usage and quota.
+A statusline companion for **GitHub Copilot CLI**: it reads the Copilot status
+JSON on stdin and prints a compact, color status line on stdout, so the host
+`copilot` binary shows your model, context usage, Git state, session time, and
+Copilot quota right in its footer.
 
 ![copilotline statusline demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-statusline.gif)
 
-## Features
-
-- Copilot CLI statusline renderer for `statusLine.command`
-- Direct CLI help when you run `copilotline` in a terminal
-- Model and reasoning effort, for example `gpt-5.5 · xhigh`
-- Context usage with color thresholds
-- Current directory, Git branch, dirty marker, and linked worktree marker
-- Session duration
-- Best-effort Copilot usage/quota display (token-based AI credits, tokens, or
-  legacy premium requests) synced to the active Copilot account
-- Read-only diagnostics through `copilotline doctor`
-- npm package plus self-contained release binaries for macOS, Linux, and Windows
-
-Example output:
+The ribbon renders model and reasoning effort, context usage with color
+thresholds, the current directory and Git branch/dirty/worktree markers,
+session duration, and a best-effort Copilot usage/quota segment:
 
 ```text
-gpt-5.5 · xhigh │ ✍️  47% │ copilotline (⎇:main*) │ ⏱ 2h27m │ 💸 copilot-user credits ●○○○○○○○ 7% 105/1.5k ⟳ Jul 1 00:00
+gpt-5.5 · xhigh │ ✍️  47% │ copilotline (main) │ ⏱ 2h27m │ 💸 octocat credits ●○○○○○○○ 13% 195/1.5k ⟳ Jul 1 00:00 UTC
 ```
+
+## See it in 60 seconds
+
+No GitHub Copilot CLI, no `gh` login, no install — just pipe a sample payload
+through `copilotline` and watch it render. `COPILOTLINE_USAGE=0` skips the quota
+lookup so the trial needs nothing but Node 18+:
+
+```bash
+echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"context_window":{"current_context_used_percentage":47},"cwd":"."}' \
+  | COPILOTLINE_USAGE=0 npx @arcasilesgroup/copilotline render
+```
+
+If you have a local clone built (`bun run build`), drive the built binary
+instead:
+
+```bash
+echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"context_window":{"current_context_used_percentage":47},"cwd":"."}' \
+  | COPILOTLINE_USAGE=0 node dist/cli.js render
+```
+
+You should see a single status line — exactly what Copilot CLI pipes into
+`copilotline` on every prompt once it is wired up.
 
 ## Install
 
-### npm
+### npm (global)
 
 ```bash
 npm install -g @arcasilesgroup/copilotline
 copilotline install
+```
+
+### npx (zero install)
+
+Run any command without installing it globally:
+
+```bash
+npx @arcasilesgroup/copilotline doctor
 ```
 
 ### macOS or Linux release binary
@@ -50,13 +67,13 @@ curl -fsSL https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/scr
 ```
 
 The installer downloads the matching release asset, verifies its `.sha256`
-sidecar, installs it to `~/.local/bin` by default, and runs
-`copilotline install`.
+sidecar, installs it to `~/.local/bin` by default, and runs `copilotline
+install`. Make sure `~/.local/bin` is on your `PATH` (add `export
+PATH="$HOME/.local/bin:$PATH"` to your shell profile if it is not).
 
 Useful installer environment variables:
 
 ```bash
-COPILOTLINE_VERSION=v0.1.0 bash scripts/install.sh
 COPILOTLINE_PREFIX=/usr/local/bin bash scripts/install.sh
 COPILOTLINE_NO_WIRE=1 bash scripts/install.sh
 ```
@@ -72,6 +89,20 @@ copilotline install
 
 Release builds also publish `copilotline-windows-x64.exe` for manual installs.
 
+## Prerequisites
+
+- **GitHub Copilot CLI** — `copilotline` is a companion for the `copilot`
+  binary's `statusLine.command` hook, so install GitHub Copilot CLI first. The
+  60-second trial above works without it, but the live statusline needs Copilot
+  CLI as the host.
+- **Node.js ≥ 18** — required by the npm package and the `npx` path
+  (`engines.node >= 18`).
+- **`gh auth login`** — only needed for the Copilot **quota** segment. Without
+  an authenticated GitHub account the rest of the statusline still renders;
+  only the `💸` usage segment is hidden.
+- **`~/.local/bin` on `PATH`** — only relevant to the curl-pipe installer, which
+  installs there by default.
+
 ## Configure GitHub Copilot CLI
 
 Run:
@@ -80,8 +111,8 @@ Run:
 copilotline install
 ```
 
-It writes the absolute executable path to `~/.copilot/settings.json` or
-`$COPILOT_HOME/settings.json`:
+It writes the absolute executable path to `~/.copilot/settings.json` (or
+`$COPILOT_HOME/settings.json`):
 
 ```jsonc
 {
@@ -99,38 +130,42 @@ It writes the absolute executable path to `~/.copilot/settings.json` or
 `footer.showCustom` is required by current GitHub Copilot CLI versions for the
 custom statusline to be visible.
 
+`install` and `uninstall` edit `settings.json` **surgically** — they preserve
+JSONC comments and trailing commas. If the file cannot be edited in place,
+`copilotline` writes a `.bak` backup, prints a warning, and then rewrites the
+file.
+
 To remove the integration:
 
 ```bash
 copilotline uninstall
 ```
 
-Install and uninstall accept JSONC input settings, but rewrite the settings file
-as formatted JSON.
-
 ## Commands
 
 ```text
-copilotline render                      Read Copilot status JSON from stdin and emit a status line
-copilotline render --json               Emit normalized JSON instead of text
-copilotline render --capture <path>     Save the raw stdin payload for schema discovery
-copilotline refresh                     Fetch and cache Copilot usage from GitHub
-copilotline refresh --json              Emit cached usage as JSON after refresh
-copilotline accounts                    Show detected Copilot/GitHub accounts
-copilotline accounts --json             Emit account detection details as JSON
-copilotline use auto                    Follow the active Copilot account
-copilotline use <login>                 Pin quota lookup to a GitHub login
-copilotline install                     Wire copilotline into ~/.copilot/settings.json
-copilotline uninstall                   Remove statusLine from ~/.copilot/settings.json
-copilotline doctor                      Run read-only diagnostics
-copilotline doctor --json               Emit structured diagnostic JSON
-copilotline --help                      Show help
-copilotline --version                   Show version
+copilotline render                 Read Copilot status JSON from stdin and emit a status line
+copilotline render --json          Emit normalized JSON instead of text
+copilotline refresh                Fetch and cache Copilot usage from GitHub
+copilotline refresh --json         Emit cached usage as JSON after refresh
+copilotline account                Configure the Copilot account interactively
+copilotline account --json         Emit account detection details as JSON
+copilotline account --auto         Follow the active Copilot account
+copilotline account --set <login>  Pin quota lookup to a GitHub login
+copilotline install                Wire copilotline into ~/.copilot/settings.json
+copilotline uninstall              Remove statusLine from ~/.copilot/settings.json
+copilotline doctor                 Run read-only diagnostics
+copilotline doctor --json          Emit structured diagnostic JSON
+copilotline --help                 Show help
+copilotline --version              Show version
 ```
 
 When stdin is piped from Copilot CLI, bare `copilotline` behaves like
-`copilotline render`. When you run `copilotline` directly in a terminal, it shows
-help.
+`copilotline render`. When you run `copilotline` directly in a terminal, it
+shows help.
+
+> `copilotline accounts` and `copilotline use auto|<login>` remain as legacy
+> aliases of `account`; prefer the canonical `account` command above.
 
 ![copilotline doctor demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-cli.gif)
 
@@ -141,7 +176,7 @@ help.
 whatever the account is metered in:
 
 ```text
-💸 copilot-user credits ●○○○○○○○ 7% 105/1.5k ⟳ Jul 1 00:00
+💸 octocat credits ●○○○○○○○ 13% 195/1.5k ⟳ Jul 1 00:00 UTC
 ```
 
 The displayed unit is derived from the data GitHub returns: `credits` or `tokens`
@@ -178,28 +213,28 @@ selected account from:
 4. GitHub CLI, only when no Copilot-specific account is detected
 
 Quota is strict per account. If Copilot is using `work-account` but only
-`personal-account` is authenticated in `gh`, `copilotline` hides the quota segment and
-reports the mismatch in `copilotline doctor` / `copilotline accounts`. It does
-not show another account's usage as a fallback.
+`personal-account` is authenticated in `gh`, `copilotline` hides the quota
+segment and reports the mismatch in `copilotline doctor` / `copilotline
+account`. It does not show another account's usage as a fallback.
 
 Inspect account detection:
 
 ```bash
-copilotline accounts
-copilotline accounts --json
+copilotline account
+copilotline account --json
 ```
 
 Use the default system-synced mode:
 
 ```bash
-copilotline use auto
+copilotline account --auto
 ```
 
 Pin to a specific login only when you intentionally want to override system
 detection:
 
 ```bash
-copilotline use work-account
+copilotline account --set work-account
 ```
 
 If the selected Copilot account is not authenticated in GitHub CLI, add it:
@@ -264,13 +299,12 @@ Copilot CLI payloads.
 - `copilotline` is not an official GitHub product.
 - GitHub tokens are read only to call the Copilot quota endpoint.
 - Tokens are never logged, printed, or cached.
-- Account detection reads Copilot/VS Code account metadata only. It does not read
-  VS Code secret storage values.
-- `render --capture <path>` writes the raw JSON payload received from Copilot
-  CLI. Treat captured files as potentially sensitive and do not share them
-  without review.
-- Release binaries are accompanied by `.sha256` files and the installer verifies
-  them before installing.
+- Account detection reads Copilot/VS Code account metadata only. It does not
+  read VS Code secret storage values.
+- The usage cache stores quota metadata only — never tokens or raw Copilot CLI
+  payloads.
+- Release binaries are accompanied by `.sha256` files and the installer
+  verifies them before installing.
 - CI runs tests, typecheck, bundle smoke tests, CodeQL, dependency audit, OSV,
   and gitleaks secret scanning.
 
@@ -291,8 +325,8 @@ Check that `statusLine.command` points to the executable you expect and that
 
 ### `copilotline` works in the terminal but not in Copilot CLI
 
-Run `copilotline install` again. It writes the absolute path, so Copilot CLI does
-not depend on your shell `PATH`.
+Run `copilotline install` again. It writes the absolute path, so Copilot CLI
+does not depend on your shell `PATH`.
 
 ### Usage quota is missing
 
@@ -308,7 +342,7 @@ If that fails, authenticate with GitHub CLI:
 gh auth login
 ```
 
-If you have multiple accounts, run `copilotline accounts` first. The token must
+If you have multiple accounts, run `copilotline account` first. The token must
 belong to the selected Copilot login. You can also set
 `COPILOTLINE_GITHUB_TOKEN_<NORMALIZED_LOGIN>` for that account.
 
@@ -317,24 +351,19 @@ belong to the selected Copilot login. You can also set
 Run:
 
 ```bash
-copilotline accounts
-copilotline use auto
+copilotline account
+copilotline account --auto
 ```
 
-`auto` follows the active Copilot account from Copilot CLI/VS Code. If you pin a
-manual account with `copilotline use <login>`, `doctor` warns when it differs
-from the system Copilot account.
+`--auto` follows the active Copilot account from Copilot CLI/VS Code. If you pin
+a manual account with `copilotline account --set <login>`, `doctor` warns when
+it differs from the system Copilot account.
 
 ### Emoji spacing looks different across terminals
 
 The context segment uses the hand emoji `✍️`. Terminal.app, Ghostty, iTerm2, and
 font choices can render emoji width differently. The statusline keeps spacing
 minimal, but final alignment depends on the terminal font stack.
-
-### JSONC comments disappeared from settings
-
-`copilotline install` and `copilotline uninstall` can read JSONC settings, but
-they currently write plain formatted JSON.
 
 ## Development
 
@@ -353,13 +382,8 @@ echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"contex
   | COPILOTLINE_USAGE=0 node dist/cli.js render
 ```
 
-Render README demo GIFs:
-
-```bash
-cd docs/remotion
-npm install
-npm run render:gif:all
-```
+The README demo GIFs are generated with [charmbracelet VHS](https://github.com/charmbracelet/vhs)
+from the real CLI output. See [docs/DEMOS.md](docs/DEMOS.md) to regenerate them.
 
 ## Release
 
