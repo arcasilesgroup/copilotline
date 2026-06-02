@@ -11,39 +11,35 @@ JSON on stdin and prints a compact, color status line on stdout, so the host
 `copilot` binary shows your model, context usage, Git state, session time, and
 Copilot quota right in its footer.
 
-![copilotline statusline demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-statusline.gif)
+<div align="center"><img src="https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/screenshot.png" width="900" alt="copilotline statusline inside GitHub Copilot CLI: model + reasoning effort, context %, dir + git branch, session timer, and Copilot AI-credit quota" /></div>
 
-The ribbon renders model and reasoning effort, context usage with color
-thresholds, the current directory and Git branch/dirty/worktree markers,
-session duration, and a best-effort Copilot usage/quota segment:
+One line, always in view: which model and reasoning effort you are on, how full
+the context window is, where you are in Git, how long the session has run, and
+how much of your Copilot AI-credit quota is left — so you never lose track mid
+task. It plugs into Copilot CLI's `statusLine.command` hook and renders entirely
+from the JSON Copilot already pipes in (the quota segment is the only part that
+calls out, and only to read your own Copilot usage).
 
-```text
-gpt-5.5 · xhigh │ ✍️  47% │ copilotline (main) │ ⏱ 2h27m │ 💸 octocat credits ●○○○○○○○ 13% 195/1.5k ⟳ Jul 1 00:00 UTC
-```
+## What it shows
 
-## See it in 60 seconds
+Each segment of the ribbon above, left to right:
 
-No GitHub Copilot CLI, no `gh` login, no install — just pipe a sample payload
-through `copilotline` and watch it render. `COPILOTLINE_USAGE=0` skips the quota
-lookup so the trial needs nothing but Node 18+:
-
-```bash
-echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"context_window":{"current_context_used_percentage":47},"cwd":"."}' \
-  | COPILOTLINE_USAGE=0 npx @arcasilesgroup/copilotline render
-```
-
-If you have a local clone built (`bun run build`), drive the built binary
-instead:
-
-```bash
-echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"context_window":{"current_context_used_percentage":47},"cwd":"."}' \
-  | COPILOTLINE_USAGE=0 node dist/cli.js render
-```
-
-You should see a single status line — exactly what Copilot CLI pipes into
-`copilotline` on every prompt once it is wired up.
+- **Model · reasoning effort** — the active model (e.g. `gpt-5.5`) and its
+  reasoning effort (e.g. `xhigh`), straight from the Copilot status payload.
+- **✍️ context-window %** — how much of the context window is used, colored by
+  threshold (green → yellow → red) so you can see when you are close to full.
+- **Working dir + Git branch + dirty marker** — the current directory name, the
+  Git branch in parentheses (e.g. `copilotline (main)`), a dirty marker when the
+  worktree has uncommitted changes, and a linked-worktree marker when relevant.
+- **⏱ session duration** — how long the current Copilot session has been running.
+- **💸 Copilot AI-credit quota** — your Copilot usage for the active account: the
+  metered unit (AI credits, tokens, or legacy premium requests), a progress bar,
+  the percent used, used/allowance counts, and the quota reset date in UTC.
+- **Agent name** — the active agent (e.g. `task`) when the payload reports one.
 
 ## Install
+
+Two steps: install the package, then wire it into GitHub Copilot CLI.
 
 ### npm (global)
 
@@ -52,9 +48,15 @@ npm install -g @arcasilesgroup/copilotline
 copilotline install
 ```
 
+The first `copilotline install` runs an interactive account picker
+(**"Choose quota account"**) so you can pick which GitHub Copilot account's
+quota the `💸` segment should follow. Pick one, or accept the default
+auto-follow of the active Copilot account — `copilotline account` changes it
+later.
+
 ### npx (zero install)
 
-Run any command without installing it globally:
+Check your setup without installing globally:
 
 ```bash
 npx @arcasilesgroup/copilotline doctor
@@ -92,9 +94,8 @@ Release builds also publish `copilotline-windows-x64.exe` for manual installs.
 ## Prerequisites
 
 - **GitHub Copilot CLI** — `copilotline` is a companion for the `copilot`
-  binary's `statusLine.command` hook, so install GitHub Copilot CLI first. The
-  60-second trial above works without it, but the live statusline needs Copilot
-  CLI as the host.
+  binary's `statusLine.command` hook, so install GitHub Copilot CLI first; it is
+  the host that pipes the status JSON into `copilotline` and shows the ribbon.
 - **Node.js ≥ 18** — required by the npm package and the `npx` path
   (`engines.node >= 18`).
 - **`gh auth login`** — only needed for the Copilot **quota** segment. Without
@@ -141,6 +142,21 @@ To remove the integration:
 copilotline uninstall
 ```
 
+## Demo
+
+Both clips are generated from the **real CLI output** (see
+[docs/DEMOS.md](docs/DEMOS.md)), against an offline, anonymized `octocat`
+fixture — no network, no token, no real account.
+
+The statusline ribbon, rendered from a sample Copilot status payload:
+
+![copilotline statusline render](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-statusline.gif)
+
+`copilotline doctor`, the read-only diagnostics that confirm Copilot CLI is
+wired up correctly:
+
+![copilotline doctor diagnostics](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-cli.gif)
+
 ## Commands
 
 ```text
@@ -166,8 +182,6 @@ shows help.
 
 > `copilotline accounts` and `copilotline use auto|<login>` remain as legacy
 > aliases of `account`; prefer the canonical `account` command above.
-
-![copilotline doctor demo](https://raw.githubusercontent.com/arcasilesgroup/copilotline/main/docs/demo-cli.gif)
 
 ## Usage and quota
 
@@ -375,15 +389,16 @@ bun run build
 bun run audit
 ```
 
-Local smoke test:
+After a build, smoke-test the binary with the read-only diagnostics:
 
 ```bash
-echo '{"model":{"display_name":"gpt-5.5","reasoning":{"effort":"xhigh"}},"context_window":{"current_context_used_percentage":8},"cwd":"."}' \
-  | COPILOTLINE_USAGE=0 node dist/cli.js render
+node dist/cli.js doctor
 ```
 
-The README demo GIFs are generated with [charmbracelet VHS](https://github.com/charmbracelet/vhs)
-from the real CLI output. See [docs/DEMOS.md](docs/DEMOS.md) to regenerate them.
+The README hero (`docs/screenshot.png`) and the two demo GIFs
+(`docs/demo-statusline.gif`, `docs/demo-cli.gif`) are generated from the real
+CLI output with [charmbracelet VHS](https://github.com/charmbracelet/vhs). See
+[docs/DEMOS.md](docs/DEMOS.md) to regenerate them.
 
 ## Release
 

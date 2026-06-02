@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A static statusline screenshot (`docs/screenshot.png`) used as the README hero — a faithful, rounded dark card of the real `copilotline render` ribbon, generated PII-free from the offline `octocat` fixture by `docs/fixtures/make-screenshot.sh`.
+- `docs/fixtures/render-demos.sh` + `docs/fixtures/seed-demo-shell.sh`: the demo GIFs now build their entire harness OFF screen (deterministic, non-PTY) and pass the isolated demo root to VHS via `$CL_DEMO`, so the tapes type only one short fixed line plus the visible command. This removes a VHS keystroke-vs-output race that could corrupt the payload assignment and make `render` fall back to the model "Copilot" and the real host Copilot account — a PII leak into the GIF.
+
 ### Changed
 
-- README rewritten newcomer-first (inverted pyramid: what + why → demo → a zero-prerequisite "See it in 60 seconds" trial → install → prerequisites → configure → command reference → usage → privacy → troubleshooting → development → release). Folded in factual corrections to match the shipped `v0.2.x` CLI: the canonical `account` command (`--auto` / `--set <login>` / `--json`) replaces the `accounts` / `use` alias-as-primary presentation; the JSONC text now describes the v0.2.0 surgical edit (comments preserved, `.bak` fallback); the removed `render --capture` flag and the stale `v0.1.0` installer example are gone; and the GitHub Copilot CLI prerequisite, Node ≥18, the `gh auth` quota prerequisite, the `~/.local/bin` PATH note, and an `npx` zero-install path are documented.
+- README rewritten newcomer-first around the static hero: the hero screenshot sits under the title with a one-line what + why, a "What it shows" section explains each statusline segment, the two demo GIFs are grouped in a "Demo" section, and "Install" is plain-text steps (npm + `copilotline install`, with a note that the first `copilotline install` runs the interactive "Choose quota account" picker). Folded in factual corrections to match the shipped `v0.2.x` CLI: the canonical `account` command (`--auto` / `--set <login>` / `--json`) replaces the `accounts` / `use` alias-as-primary presentation; the JSONC text describes the v0.2.0 surgical edit (comments preserved, `.bak` fallback); the removed `render --capture` flag and the stale `v0.1.0` installer example are gone; and the GitHub Copilot CLI prerequisite, Node ≥18, the `gh auth` quota prerequisite, the `~/.local/bin` PATH note, and an `npx` path are documented.
 - Demo pipeline migrated from Remotion to [charmbracelet VHS](https://github.com/charmbracelet/vhs). The README demo GIFs are now generated from the **real CLI output** by `.tape` scripts (`docs/demo-statusline.tape`, `docs/demo-cli.tape`) driving `node dist/cli.js`, with public-safe offline fixtures under `docs/fixtures/` and a regeneration guide at `docs/DEMOS.md`. GIF filenames are unchanged (`docs/demo-statusline.gif`, `docs/demo-cli.gif`).
+- The demo GIFs no longer show a synthetic `copilotline install` step: install runs off screen as part of setup, so each GIF shows only the relevant command — `echo "$PAYLOAD" | copilotline render` (statusline) and `copilotline doctor` (diagnostics). The canvases were re-tightened to fit (`1352x128` and `1844x612`).
 
 ### Removed
 
+- The README "See it in 60 seconds" raw-JSON `echo … | copilotline render` trial, which newcomers found to be confusing noise. The hero screenshot plus the "What it shows" section convey the same thing without a pasteable JSON blob.
 - The `docs/remotion/` project (React + webpack + `@remotion/*`) and its lockfile, eliminating a heavyweight demo toolchain and its recurring transitive-CVE maintenance surface. Replaced by VHS `.tape` scripts (see above).
 
 > Note: the npm-page README only refreshes on the next publish; the GitHub-rendered README and the raw-served GIFs update on merge to `main`.
