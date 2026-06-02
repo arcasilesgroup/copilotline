@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README "See it in 60 seconds" raw-JSON `echo … | copilotline render` trial, which newcomers found to be confusing noise. The hero screenshot plus the "What it shows" section convey the same thing without a pasteable JSON blob.
 - The `docs/remotion/` project (React + webpack + `@remotion/*`) and its lockfile, eliminating a heavyweight demo toolchain and its recurring transitive-CVE maintenance surface. Replaced by VHS `.tape` scripts (see above).
 
+### Fixed
+
+- **Security/privacy:** `copilotline render` no longer reads or renders the host's Copilot account or quota when stdin is empty or not valid JSON. Previously, empty/garbage stdin collapsed to `{}` and the render path still detected the real Copilot account (reading `~/.copilot/config.json`, VS Code state, and spawning `gh`/`sqlite3`), then rendered that login and its cached quota — a PII leak triggered by piping nothing. Empty/invalid stdin now prints a neutral `copilotline` placeholder (exit 0) with zero host-derived data and performs no account detection or quota read. Invalid JSON additionally emits a single `copilotline: ignoring invalid status JSON on stdin` diagnostic to stderr. `render --json` on empty/invalid stdin now emits a neutral envelope whose `data` field is `null` instead of the host account/quota object. A valid status payload renders the full ribbon exactly as before.
+
 > Note: the npm-page README only refreshes on the next publish; the GitHub-rendered README and the raw-served GIFs update on merge to `main`.
 
 ## [0.2.1] - 2026-06-02

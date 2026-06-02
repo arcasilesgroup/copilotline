@@ -45,6 +45,7 @@ import {
   writeCopilotlineConfig,
 } from "./infrastructure/copilotline-config.js";
 import { getGitInfo } from "./infrastructure/git-info.js";
+import { asRecord } from "./infrastructure/value-reader.js";
 import { printDoctorReport } from "./presentation/doctor-report.js";
 import { VERSION } from "./version.js";
 import { readFlagValue } from "./cli-args.js";
@@ -131,14 +132,44 @@ async function runRender(args: string[]): Promise<number> {
   const stdin = await readStandardInput();
 
   const parsed = safeParse(stdin.raw);
+
+  // No trustworthy payload (empty or unparseable stdin): never detect or read
+  // the host Copilot account/quota — emit a neutral, account-free placeholder
+  // and exit 0. (spec-004 — PII guard.)
+  if (parsed.kind !== "payload") {
+    if (parsed.kind === "invalid") {
+      process.stderr.write(
+        "copilotline: ignoring invalid status JSON on stdin\n",
+      );
+    }
+    if (asJson) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            version: VERSION,
+            generated_at: new Date().toISOString(),
+            truncated_input: stdin.truncated,
+            data: null,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      process.stdout.write("copilotline\n");
+    }
+    return 0;
+  }
+
+  const payload = parsed.value;
   // Resolve the account once for the whole render; thread it into the
   // cache-only readers so the render path never re-detects (no gh/sqlite3
   // foreground spawns).
-  const account = selectCopilotAccount(parsed).selected;
+  const account = selectCopilotAccount(payload).selected;
   const usage = quotaForRender(account);
   refreshCopilotUsageInBackground(statusLineCommand(), account);
   const usageConfig = readCopilotlineConfig().usage;
-  const snapshot = buildStatusSnapshot(parsed, {
+  const snapshot = buildStatusSnapshot(payload, {
     now: () => Date.now(),
     getGitInfo,
     quota: usage,
@@ -732,15 +763,24 @@ function sameAccount(
   );
 }
 
-function safeParse(raw: string): unknown {
+type ParsedStdin =
+  | { kind: "payload"; value: unknown }
+  | { kind: "empty" }
+  | { kind: "invalid" };
+
+function safeParse(raw: string): ParsedStdin {
   if (raw.trim() === "") {
-    return {};
+    return { kind: "empty" };
   }
 
   try {
-    return JSON.parse(raw) as unknown;
+    const value = JSON.parse(raw) as unknown;
+    if (asRecord(value) === undefined) {
+      return { kind: "invalid" };
+    }
+    return { kind: "payload", value };
   } catch {
-    return {};
+    return { kind: "invalid" };
   }
 }
 
