@@ -1,257 +1,251 @@
 ---
 execution_route:
   version: 1
-  spec: spec-003
+  spec: spec-004
   executor: build
-  automation: assisted
-  concern_count: 2
-  estimated_files: 18
-  reason: "Single cohesive docs + demo-tooling concern. File count is inflated by one mechanical bulk-deletion of docs/remotion/ (~11 files); the substantive concerns are just README accuracy/IA and the Remotion->VHS demo migration. No code (src/) changes, no cross-cutting DAG, no parallel waves — waved autopilot would add ceremony without benefit. Automation is 'assisted' because GIF rendering needs vhs+ffmpeg (absent in this env) and is a manual maintainer step per spec Non-Goal."
+  automation: autonomous
+  concern_count: 1
+  estimated_files: 3
+  reason: "Single-concern security hotfix at the runRender/safeParse boundary in src/cli.ts plus its tests and a CHANGELOG note. No domain changes, no parallel waves, fully automatable in-env (no vhs/manual steps). Well under the autopilot threshold."
   safe_next_command: "/ai-build"
-spec: spec-003
-slug: readme-and-remotion-repair
-title: README rewrite and demo-pipeline migration to VHS — execution plan
+spec: spec-004
+slug: render-empty-stdin-pii
+title: Guard render against empty/invalid stdin leaking the real account — execution plan
 status: approved
-pipeline: full
+pipeline: hotfix
 created: 2026-06-02
 ---
 
-# Plan — spec-003 README rewrite + Remotion→VHS demo migration
+# Plan — spec-004 render empty/invalid stdin PII guard
 
-## Environment facts (read-only exploration, 2026-06-02)
+## Code facts (read-only exploration, 2026-06-02)
 
-- `vhs` **0.11.0** + `ffmpeg` **8.1.1** + `ttyd`: **installed** (operator chose
-  to install, 2026-06-02). → GIF rendering (T-8) is now **automatable by
-  `/ai-build`** in this env. CI is still NOT extended to render (spec Non-Goal);
-  the `.tape` scripts remain the source of truth for future regens.
-- `dist/cli.js`: **present** → README smoke-test and `.tape` scripts can drive
-  the real binary.
-- Root `package.json` `render` script = `bun src/cli.ts render` — **unrelated**
-  to `docs/remotion`. Deleting Remotion needs **no** root-package change.
-- Only repo reference to `docs/remotion` outside the folder itself is
-  `README.md:359` (the "Render README demo GIFs" dev block). The
-  `ai-video-editing` skill mentions Remotion generically — out of scope, leave.
-- Canonical CLI surface (`src/cli.ts` HELP) — the README command table MUST
-  match exactly:
-  `render` / `render --json` / `refresh` / `refresh --json` /
-  `account` / `account --json` / `account --auto` / `account --set <login>` /
-  `install` / `uninstall` / `doctor` / `doctor --json` / `--help` / `--version`.
-  (No `render --capture`. No `accounts` / `use` in the canonical table — they
-  are legacy aliases only.)
+- `runRender(args)` — `src/cli.ts:129-165`: reads stdin → `safeParse` → then
+  **unconditionally** `selectCopilotAccount(parsed).selected` (`:137`),
+  `quotaForRender(account)` (`:138`), `refreshCopilotUsageInBackground(...)`
+  (`:139`), `buildStatusSnapshot(parsed, …)`; then `--json` branch (`:147-161`)
+  or `formatStatusLine` (`:163`). Both output paths return 0.
+- `safeParse(raw)` — `src/cli.ts:735-745`: returns `{}` for BOTH `raw.trim()===""`
+  and `JSON.parse` failure → the collapse that erases the empty-vs-payload signal.
+- Bare invocation — `src/cli.ts:112-119`: non-TTY stdin → `runRender([])` (same path).
+- `modelSegment` — `src/application/render-status-line.ts:681`: `label?.trim() ||
+  "Copilot"` (cosmetic fallback, OUT OF SCOPE per spec Non-Goals).
+- Quota ternary — `render-status-line.ts:162`: `hasQuotaData(inputQuota) ?
+  inputQuota : (deps.quota ?? emptyQuota())` → empty payload routes to the live
+  `deps.quota` (host cache).
+- Tests — `tests/cli.test.ts`: `run()` helper (`:13-28`) hardcodes
+  `COPILOTLINE_USAGE:"0", COPILOTLINE_ACCOUNT:"0"` (masks the bug). Tests build
+  `dist/cli.js` in `beforeAll`. `tests/helpers.js` exposes
+  `createTempDir`/`cleanupTempDir`. Account resolution order
+  (`copilot-account.ts`): payload → `~/.copilot/config.json` → VS Code sqlite3 →
+  `gh` (first non-manual candidate wins → a fixture `COPILOT_HOME` config short-
+  circuits before VS Code/gh).
 
-## Design (from spec-003 brainstorm; design already settled)
+## Design
 
-README information architecture was decided during `/ai-brainstorm` via
-`/ai-design` and approved by the operator: **newcomer-first inverted pyramid**.
-No re-interrogation. Section order:
-
-1. Title + 1-line what + 1-line why
-2. Demo GIF (statusline ribbon)
-3. **See it in 60 seconds** — zero-prereq trial (piped `echo` smoke test)
-4. Install (npm / curl-pipe / Windows / npx)
-5. Prerequisites (GitHub Copilot CLI, Node ≥18, `gh auth` for quota)
-6. Configure GitHub Copilot CLI
-7. Command reference (matches `src/cli.ts` HELP)
-8. Usage & quota
-9. Privacy & security
-10. Troubleshooting
-11. Development (VHS demo regen link)
-12. Release
-13. License
-
-Tone: technical-precise, terminal-native (no marketing fluff). Differentiator:
-the no-setup piped-`echo` trial as the hero moment.
+`--skip-design` (no UI). Output contract decided in spec-004 interrogation:
+empty/invalid stdin → stdout placeholder `copilotline` (exit 0, zero host data);
+invalid JSON additionally writes one diagnostic line to **stderr**; `--json`
+emits a neutral envelope with `data: null`.
 
 ## Architecture
 
-`ad-hoc` — documentation + demo tooling. No application architecture touched;
-hexagonal `src/` boundary is untouched (spec Non-Goal).
+`ad-hoc` — guard clause at the application/CLI boundary (`runRender`). Hexagonal
+domain (`render-status-line`, `copilot-account`, `copilot-usage`) is **untouched**;
+the fix is purely "do not call the host readers when there is no payload".
 
-## TDD note
+## TDD
 
-No unit-testable code changes. The RED-equivalent for each concern is a
-**verification gate** (command-parity grep, secret scan, dead-reference grep)
-defined per task; the terminal verify task (T-9) is the GREEN.
+RED test task (T-1) precedes the GREEN implementation (T-2/T-3): the empty/invalid
+no-leak tests must fail against current `main`, then pass after the guard.
 
 ---
 
-## Phase 1 — Demo toolchain migration (Remotion → VHS)
+## Phase 1 — RED
 
-### T-1 — Author `docs/demo-statusline.tape`
+### T-1 — Failing tests: empty/invalid stdin must not leak the host account
 - Agent: build
-- Files: `docs/demo-statusline.tape` (new)
-- Principles applied: §10.2 YAGNI, §10.7 Clean Code
-- Patch (deterministic): — (judgment: VHS `.tape` authoring)
-- Detail: VHS tape that renders the **full statusline ribbon** by driving the
-  real binary — `echo '<public-safe sample status JSON>' | COPILOTLINE_USAGE=0
-  COPILOTLINE_CACHE_DIR=<committed fixture cache dir> node dist/cli.js render`.
-  Sample values mirror README (`gpt-5.5 · xhigh`, ~47% context, `copilotline`
-  cwd, `main`); the fixture cache supplies a **fabricated** credits snapshot so
-  the quota segment renders with **no network and no token**. Output →
-  `../demo-statusline.gif` (stable filename, D-003-02). Set theme/width/height
-  to keep the ribbon on one line.
-- Gate: tape references only `node dist/cli.js`, `COPILOTLINE_USAGE=0`, and a
-  committed fixture; no real token/login/path strings (`gitleaks` clean).
+- Files: `tests/cli.test.ts` (new cases + a non-masking runner), uses `tests/helpers.js` `createTempDir`
+- Principles applied: §10.5 TDD, §10.7 Clean Code
+- Patch (deterministic): — (judgment: fixture setup + assertions)
+- Detail: Add tests that DO NOT use the bug-masking env. Create a temp
+  `COPILOT_HOME` fixture with `config.json`
+  `{"lastLoggedInUser":{"login":"octocat","host":"github.com"}}` and an octocat
+  usage-cache, then spawn `node dist/cli.js render` with env
+  `{ COPILOTLINE_ACCOUNT: "1", COPILOTLINE_USAGE: "1", COPILOT_HOME: <fixture> }`
+  (detection ENABLED, pointed at the fixture so a leak would surface "octocat"):
+  - empty stdin (`input: ""`): assert `status === 0`, `stdout.trim() === "copilotline"`,
+    and `stdout` does NOT contain `octocat`, `195`, `(main)`, or `credits`.
+  - invalid stdin (`input: "not json"`): same stdout assertions, plus
+    `stderr` matches `/invalid/i`.
+  - `render --json` empty: assert `status === 0`, parsed JSON has `data === null`
+    and the string `octocat` is absent.
+  - regression GOLDEN: a valid payload (`{model:{displayName:"GPT-5.4"},contextWindow:{usedPercent:12}}`)
+    still renders `GPT-5.4` + `12%` (unchanged) — using the existing masked `run()` is fine here.
+- Gate: the three empty/invalid tests FAIL against current `src/cli.ts` (octocat
+  leaks); the golden passes. (Build agent runs `bun test` to confirm RED.)
 
-### T-2 — Author `docs/demo-cli.tape`
+## Phase 2 — GREEN
+
+### T-2 — Discriminate empty vs invalid vs payload in `safeParse`
 - Agent: build
-- Files: `docs/demo-cli.tape` (new), fixture cache under `docs/fixtures/` (new, if needed)
-- Principles applied: §10.2 YAGNI, §10.7 Clean Code
-- Patch (deterministic): — (judgment)
-- Detail: VHS tape rendering a `copilotline doctor` reveal from the real binary
-  with `COPILOTLINE_USAGE=0` (and the same fixture cache) so doctor output is
-  deterministic and **never** prints a real token/account. Output →
-  `../demo-cli.gif`.
-- Gate: doctor demo emits no secrets/PII; `gitleaks` clean; tape drives only the
-  local `dist/cli.js`.
+- Files: `src/cli.ts:735-745`
+- Principles applied: §10.3 SOLID (single responsibility at the boundary), §10.7 Clean Code
+- Patch (deterministic):
+  ```diff
+  -function safeParse(raw: string): unknown {
+  -  if (raw.trim() === "") {
+  -    return {};
+  -  }
+  -
+  -  try {
+  -    return JSON.parse(raw) as unknown;
+  -  } catch {
+  -    return {};
+  -  }
+  -}
+  +type ParsedStdin =
+  +  | { kind: "payload"; value: unknown }
+  +  | { kind: "empty" }
+  +  | { kind: "invalid" };
+  +
+  +function safeParse(raw: string): ParsedStdin {
+  +  if (raw.trim() === "") {
+  +    return { kind: "empty" };
+  +  }
+  +
+  +  try {
+  +    return { kind: "payload", value: JSON.parse(raw) as unknown };
+  +  } catch {
+  +    return { kind: "invalid" };
+  +  }
+  +}
+  ```
+- Gate: `tsc --noEmit` clean (callers updated in T-3).
 
-### T-3 — Write `docs/DEMOS.md` (regeneration guide)
+### T-3 — Guard `runRender`: no host reads without a payload
 - Agent: build
-- Files: `docs/DEMOS.md` (new)
-- Principles applied: §10.7 Clean Code, §10.6 SDD
-- Patch (deterministic): — (judgment)
-- Detail: Replaces the deleted `docs/remotion/README.md`. Covers: VHS + ffmpeg
-  install (`brew install vhs ffmpeg`), `bun run build` first, then
-  `vhs docs/demo-statusline.tape && vhs docs/demo-cli.tape`, the PII rule
-  (public-safe sample values only — no real tokens/accounts/usernames/private
-  paths), and **when** to regenerate (statusline/doctor output changes).
-- Gate: file exists; commands reference real script paths; no machine-specific
-  paths (anonymous-content rule, CLAUDE.md §13 rule 4).
+- Files: `src/cli.ts:129-165`
+- Principles applied: §10.3 SOLID, §10.7 Clean Code, §10.2 YAGNI
+- Patch (deterministic):
+  ```diff
+     const parsed = safeParse(stdin.raw);
+  -  // Resolve the account once for the whole render; thread it into the
+  -  // cache-only readers so the render path never re-detects (no gh/sqlite3
+  -  // foreground spawns).
+  -  const account = selectCopilotAccount(parsed).selected;
+  -  const usage = quotaForRender(account);
+  -  refreshCopilotUsageInBackground(statusLineCommand(), account);
+  -  const usageConfig = readCopilotlineConfig().usage;
+  -  const snapshot = buildStatusSnapshot(parsed, {
+  -    now: () => Date.now(),
+  -    getGitInfo,
+  -    quota: usage,
+  -  });
+  +
+  +  // No trustworthy payload (empty or unparseable stdin): never detect or read
+  +  // the host Copilot account/quota — emit a neutral, account-free placeholder
+  +  // and exit 0. (spec-004 — PII guard.)
+  +  if (parsed.kind !== "payload") {
+  +    if (parsed.kind === "invalid") {
+  +      process.stderr.write("copilotline: ignoring invalid status JSON on stdin\n");
+  +    }
+  +    if (asJson) {
+  +      process.stdout.write(
+  +        `${JSON.stringify(
+  +          {
+  +            version: VERSION,
+  +            generated_at: new Date().toISOString(),
+  +            truncated_input: stdin.truncated,
+  +            data: null,
+  +          },
+  +          null,
+  +          2,
+  +        )}\n`,
+  +      );
+  +    } else {
+  +      process.stdout.write("copilotline\n");
+  +    }
+  +    return 0;
+  +  }
+  +
+  +  const payload = parsed.value;
+  +  const account = selectCopilotAccount(payload).selected;
+  +  const usage = quotaForRender(account);
+  +  refreshCopilotUsageInBackground(statusLineCommand(), account);
+  +  const usageConfig = readCopilotlineConfig().usage;
+  +  const snapshot = buildStatusSnapshot(payload, {
+  +    now: () => Date.now(),
+  +    getGitInfo,
+  +    quota: usage,
+  +  });
+  ```
+- Gate: T-1's empty/invalid tests now PASS; golden still passes; `tsc --noEmit` clean.
 
-### T-4 — Delete `docs/remotion/` entirely
-- Agent: build
-- Files: `docs/remotion/**` (delete: package.json, package-lock.json,
-  tsconfig.json, remotion.config.ts, .gitignore, README.md, src/Statusline.tsx,
-  src/Cli.tsx, src/Root.tsx, src/index.ts, src/_helpers.ts)
-- Principles applied: §10.2 YAGNI, CLAUDE.md §13 rule 3 (hard delete, no shim)
-- Patch (deterministic): `git rm -r docs/remotion`
-- Gate: `docs/remotion/` gone; `grep -rn "remotion" --include=*.json
-  --include=*.ts .` (excl node_modules/.git/ai-video-editing skill) returns
-  nothing; no `react`/`react-dom`/`webpack`/`@remotion` left in repo.
+## Phase 3 — Document + verify
 
-## Phase 2 — README rewrite (depends on T-1 for the demo asset reference)
-
-### T-5 — Rewrite `README.md` newcomer-first with corrected facts
-- Agent: build
-- Files: `README.md`
-- Principles applied: §10.6 SDD, §10.7 Clean Code, §10.4 DRY
-- Patch (deterministic): — (judgment: full restructure)
-- Detail: Apply the `## Design` section order. Hero = zero-prereq 60-second
-  trial. Fold in ALL D-003-04 factual corrections:
-  - Command table → canonical `account` (`--auto`/`--set`/`--json`); **remove**
-    `render --capture`; keep `accounts`/`use` out of the canonical table (at
-    most a one-line "legacy aliases" footnote).
-  - JSONC text → v0.2.0 surgical-edit behavior (preserves comments); **delete**
-    the stale "JSONC comments disappeared" troubleshooting entry.
-  - **Remove** the `COPILOTLINE_VERSION=v0.1.0` example (or bump to current).
-  - **Add**: Node ≥18, GitHub Copilot CLI prerequisite, `gh auth` quota
-    prerequisite, `~/.local/bin` PATH note, `npx @arcasilesgroup/copilotline
-    doctor` zero-install trial.
-  - Dev section: replace `cd docs/remotion && npm install && npm run
-    render:gif:all` (README:356-362) with a pointer to `docs/DEMOS.md` (VHS).
-  - Keep the two GIF image URLs (stable filenames, D-003-02).
-- Gate: every command/flag in README appears verbatim in `src/cli.ts` HELP; zero
-  occurrences of `--capture`, `npm run render:gif`, `docs/remotion`, or
-  `v0.1.0`; markdown links resolve; English only (no `README.es.md`).
-
-### T-6 — Update `CHANGELOG.md`
+### T-4 — CHANGELOG entry
 - Agent: build
 - Files: `CHANGELOG.md`
-- Principles applied: §10.7 Clean Code, CLAUDE.md §13 rule 3 (document breakage)
-- Patch (deterministic): — (judgment: changelog prose)
-- Detail: Add an `## [Unreleased]` entry — `Changed`: README rewritten
-  newcomer-first + factual corrections; `Changed`/`Removed`: demo pipeline
-  migrated from Remotion to VHS (`docs/remotion/` removed, `.tape` + `docs/DEMOS.md`
-  added). Note the npm-page README refreshes on next publish.
-- Gate: CHANGELOG parses; entry references the Remotion→VHS swap.
+- Principles applied: §10.7 Clean Code, CLAUDE.md §13 rule 3 (document behavior change)
+- Patch (deterministic): — (judgment: changelog prose under `## [Unreleased]`)
+- Detail: `Fixed` — `copilotline render` no longer reads or renders the host
+  Copilot account/quota when stdin is empty or not valid JSON; it now prints a
+  neutral `copilotline` placeholder (exit 0) and, for invalid JSON, a stderr
+  diagnostic. Note the `render --json` empty/invalid envelope now has `data: null`.
+- Gate: CHANGELOG parses; entry present.
 
-## Phase 3 — Cleanup + verification
-
-### T-7 — Close obsolete branch `fix/osv-remotion-transitive-deps` (MANUAL / maintainer)
-- Agent: guard (advisory) — **manual maintainer action** (outward-facing remote delete)
-- Files: — (git refs only)
-- Principles applied: §10.2 YAGNI
-- Patch (deterministic): — (run manually, fail-open if already gone)
-  ```
-  git branch -D fix/osv-remotion-transitive-deps 2>/dev/null || true
-  git push origin --delete fix/osv-remotion-transitive-deps 2>/dev/null || true
-  ```
-- Gate (AC-8): branch absent locally and on origin.
-
-### T-8 — Render the two GIFs (build — vhs+ffmpeg now installed)
-- Agent: build
-- Files: `docs/demo-statusline.gif`, `docs/demo-cli.gif` (regenerated binaries)
-- Principles applied: §10.6 SDD
-- Patch (deterministic): `bun run build && vhs docs/demo-statusline.tape && vhs docs/demo-cli.tape`
-- Detail: Depends on T-1/T-2 (`.tape`) and a built `dist/cli.js`. Render both
-  GIFs, then **review for PII** before staging (no real token/account/path).
-  Replaces the stale committed GIFs in place (stable filenames, D-003-02).
-- Gate (AC-2): GIFs reproduce from the `.tape` scripts; visually reflect v0.2.x
-  output; PII-free (`gitleaks` clean on the demo assets).
-
-### T-9 — Terminal verification (read-only)
+### T-5 — Terminal verification
 - Agent: verify
-- Files: repo-wide (read-only)
-- Principles applied: §10.6 SDD, §10.7 Clean Code
+- Files: repo (read-only)
+- Principles applied: §10.5 TDD, §10.6 SDD
 - Patch (deterministic): —
-- Detail: Confirm the automatable acceptance-criteria subset:
-  - AC-1: no `react`/`react-dom`/`webpack`/`@remotion` anywhere; `docs/remotion/`
-    gone.
-  - AC-4: README command parity vs `src/cli.ts` HELP; no `--capture`.
-  - AC-5: prereqs + npx + PATH present in README.
-  - AC-6: English only; no `README.es.md`.
-  - AC-7: `gitleaks` clean on `docs/*.tape`, `docs/fixtures/**`, `docs/DEMOS.md`.
-  - Dead refs: no `docs/remotion`, `npm run render:gif`, `v0.1.0` in README.
-- Gate: all checks pass; report deviations. (AC-2/AC-3-visual and AC-8 are
-  manual, covered by T-7/T-8.)
+- Detail: `bun test` (all green incl. new no-leak tests), `tsc --noEmit` clean.
+  Manual repro evidence: `printf '' | node dist/cli.js render` → exactly
+  `copilotline`, exit 0, no login/quota; `printf 'x' | node dist/cli.js render`
+  → `copilotline` + stderr diagnostic; a valid payload still renders the full
+  ribbon. Confirm no `--capture`/behavior regressions elsewhere.
+- Gate: all pass; report evidence. Maps AC-1..AC-7.
 
 ---
 
-## Phase ordering & gates
+## Phase ordering
 
-- **Phase 1** (T-1…T-4) before **Phase 2** (T-5 references the demo asset + the
-  DEMOS.md link). T-1/T-2/T-3 are independent; T-4 (delete) runs last in the
-  phase to keep tape authoring referenceable if needed.
-- **Phase 2** (T-5, T-6) after Phase 1.
-- **Phase 3**: T-8 (render) after T-1/T-2 + a built `dist/cli.js`; T-9 (verify)
-  last. T-7 (branch remote-delete) is the only **manual maintainer step** —
-  surfaced in the PR body, not blocking the build.
-
-## Automatable vs manual split
-
-- **Automatable by `/ai-build`**: T-1, T-2, T-3, T-4, T-5, T-6, T-8, T-9.
-- **Manual maintainer (outward-facing remote ref delete)**: T-7 (close
-  `fix/osv-remotion-transitive-deps`). `/ai-pr` surfaces it as a follow-up.
+T-1 (RED) → T-2 + T-3 (GREEN, same file `src/cli.ts`; T-2 then T-3) → T-4 (CHANGELOG) → T-5 (verify). All automatable by `/ai-build`; no manual steps.
 
 ## Quality Remediation
 
 used: true
 max_attempts: 1
-Scope (blocker/high from initial assessment, mechanical + finding-scoped):
-- BLOCKER: `docs/fixtures/usage-cache.json` swallowed by `.gitignore:13`
-  (`usage-cache.json`) → negate for the fixture path + force-add so the demo
-  regenerates from a clean clone (AC-2).
-- HIGH: dangling `docs/remotion` config — remove the `/docs/remotion` npm block
-  from `.github/dependabot.yml` and the dead `docs/remotion/*` rules from
-  `.gitignore` (AC-1).
-Low findings (CHANGELOG branch-name note, spec-003.json state drift, doctor
-`use auto` src hint) are recorded in the PR body, NOT remediated here (the
-doctor hint is a spec Non-Goal src change → follow-up spec).
-final_reassessment: pass
+Finding (review, HIGH, empirically reproduced): `safeParse` classified ANY
+`JSON.parse` success as `payload`, so a valid-but-non-object JSON (`null`, `5`,
+`true`, `[]`, `"x"`, whitespace-padded primitive) bypassed the guard and still
+leaked the host account (`printf '5' | render` → `…octocat credits 42% 84/200`).
+Same leak class spec-004 must close. Mechanical, finding-scoped fix: gate the
+`payload` kind on the domain's own `asRecord(value)` (value-reader.ts) so a
+parsed non-object is classified `invalid` (guarded branch, no host read). Plus
+F2: add no-leak tests for `null`/`[]`/`5`.
 
 ## Quality Outcome
 
-Initial assessment (verify 88/100 + review): 1 blocker + 1 high, corroborated.
-After one bounded remediation pass + deterministic final reassessment:
-**0 blockers, 0 criticals, 0 highs → PASS.**
-- Blocker (fixture gitignored): `.gitignore` negated for `docs/fixtures/usage-cache.json`
-  + force-added → `git check-ignore` clears, `git ls-files` lists it.
-- High (dangling docs/remotion config): removed `/docs/remotion` npm block from
-  `.github/dependabot.yml` + dead `docs/remotion/*` rules from `.gitignore`.
-- Evidence: `src/` unchanged; `bun test` 85 pass / 0 fail; `tsc --noEmit` exit 0;
-  gitleaks clean; dependabot.yml valid (npm:/ + github-actions:/).
+Initial assessment: verify 98/100 PASS, but adversarial review found **1 HIGH**
+(F1: non-object JSON — `null`/`5`/`true`/`[]`/`"x"`/whitespace-primitive — bypassed
+the `payload` discriminant and empirically leaked the octocat fixture account).
+One bounded remediation pass: gated `safeParse`'s `payload` kind on `asRecord(value)`
+so a parsed non-object routes to `invalid` (guarded). Added 4 no-leak tests.
+**Final reassessment → 0 blockers / 0 criticals / 0 highs → PASS.**
+- Re-review (adversarial, built + ran the binary): F1 closed across the full
+  non-object/empty/garbage matrix; guard ordering + all entry points + `--json`
+  confirmed; golden unregressed.
+- Deterministic gates: `bun test` 93 pass / 0 fail; `tsc --noEmit` clean;
+  `gitleaks protect --staged` clean; source scope = `src/cli.ts` only.
+- Known boundary (INFO, by-design per D-004-01): a literal `{}` / sparse object
+  still takes the payload branch and reads the host account — outside the
+  accidental empty/garbage leak vector this spec closes (Approach C, requiring
+  specific keys, was explicitly rejected). Candidate future hardening, not a blocker.
 
-## Operator decision (resolved)
+final_reassessment: pass
 
-- GIF render (T-8): operator chose to **install vhs+ffmpeg now** → `/ai-build`
-  renders fresh v0.2.x GIFs in the same PR. Resolved 2026-06-02.
+## Acceptance criteria mapping
+
+AC-1/AC-2/AC-4 → T-1 + T-3. AC-3 (golden) → T-1 + T-3. AC-5 (bare invocation) → shares the guarded `runRender` (T-3). AC-6 (no masking) → T-1 fixture design. AC-7 → T-5.

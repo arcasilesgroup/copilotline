@@ -1,174 +1,152 @@
 ---
-id: spec-003
-slug: readme-and-remotion-repair
-title: README rewrite and demo-pipeline migration to VHS
+id: spec-004
+slug: render-empty-stdin-pii
+title: Guard render against empty/invalid stdin leaking the real account
 status: approved-pending
 created: 2026-06-02
 refs: []
 ---
 
-# README rewrite and demo-pipeline migration to VHS
+# Guard render against empty/invalid stdin leaking the real account
 
 ## Summary
 
-The root `README.md` is **significantly stale** relative to the shipped
-`v0.2.1` CLI, and the Remotion project at `docs/remotion/` that generates the
-two README demo GIFs **cannot run** and carries an unresolved security desync.
-This spec makes the README an accurate, newcomer-first document that lets a
-first-time visitor understand *what copilotline is*, *what it does*, and *try
-it with zero prerequisites in under a minute* — and replaces the heavyweight
-Remotion demo toolchain with [charmbracelet VHS](https://github.com/charmbracelet/vhs)
-`.tape` scripts that render the **real CLI output**, so the demos can never
-again drift from reality and stop importing a recurring transitive-CVE tax.
+`copilotline render` reads a Copilot status payload from stdin. When stdin is
+**empty** or **not valid JSON**, `safeParse` silently returns `{}`
+(`src/cli.ts:735-745`) and `runRender` then proceeds **unconditionally** to:
+detect the host's real Copilot account (`selectCopilotAccount({})` →
+`~/.copilot/config.json`, VS Code `sqlite3`, `gh auth status`,
+`src/cli.ts:137` / `src/infrastructure/copilot-account.ts:59-94`), read that
+account's cached quota (`quotaForRender(account)`, `src/cli.ts:138`), and start a
+background refresh (`src/cli.ts:139`). The snapshot is built from `{}`, so the
+model label falls back to the literal `"Copilot"`
+(`src/application/render-status-line.ts:681`) and the live host quota flows in
+via the `hasQuotaData` ternary (`render-status-line.ts:162`). Net effect:
 
-This is a **docs + demo-tooling** change only. No `src/` behavior, no CLI
-feature, and no npm version/release is in scope.
+```
+echo '' | copilotline render
+Copilot · 💸 <real-login> chat ●○○○○○○○ 3% 6/200 ⟳ …
+```
 
-### Current-state evidence (research, spec-003)
-
-README rot (verdict: `significantly-stale`):
-- `render --capture <path>` documented (README:116) but **removed in v0.2.0**
-  (CHANGELOG [0.2.0] Removed; zero `capture` matches in `src/cli.ts`).
-- `accounts` / `use auto` / `use <login>` presented as canonical
-  (README:119-121) but the real canonical command is `account` (singular) with
-  `--json` / `--auto` / `--set <login>` (`src/cli.ts:55-68`); `accounts`/`use`
-  are legacy alias shims (`src/cli.ts:100-109`).
-- JSONC handling text — "rewrites as formatted JSON" (README:108-109) and the
-  "JSONC comments disappeared" troubleshooting (README:333-337) — describes
-  **pre-v0.2.0 behavior**; v0.2.0 edits surgically and preserves comments.
-- Install example pins `COPILOTLINE_VERSION=v0.1.0` (README:59) — two versions
-  back, breaking.
-- Missing for a newcomer: Node ≥18 requirement, the canonical `account`
-  command, an `npx` zero-install trial path, the prerequisite that **GitHub
-  Copilot CLI itself must be installed**, the `gh auth` prerequisite for quota,
-  and the `~/.local/bin` PATH gap from the curl installer.
-
-Remotion breakage (fix complexity: `moderate`):
-- `docs/remotion/node_modules` absent → nothing runs without `npm install`.
-- Security desync: `docs/remotion/package.json` has an `overrides` block
-  (webpack / fast-uri / ws) but `package-lock.json` root `""` entry **lacks
-  it**. The fix lives on the **unmerged** branch
-  `fix/osv-remotion-transitive-deps` (commit `3f49ca3`). A clean `npm install`
-  on `main` may re-resolve to vulnerable `fast-uri` (High, GHSA-q3j6-qgpj-74h6)
-  / `ws` (Medium, GHSA-58qx-3vcg-4xpx).
-- The two GIFs (`docs/demo-statusline.gif`, `docs/demo-cli.gif`) exist, are
-  git-tracked, and are **load-bearing** in the README (lines 16, 135) but
-  **stale** — never re-rendered after the token-billing UI change to
-  `Statusline.tsx` (PRs #13/#14).
-- The stack (React 19 + webpack + 6 `@remotion/*` deps) is heavyweight for two
-  terminal GIFs and contradicts copilotline's own **zero-dependency** design.
+This is a **PII leak** — any caller that pipes nothing (or garbage) gets the
+host's real account login and quota rendered to stdout — plus an unnecessary
+**side-effect** (spawning `gh` / `sqlite3` on every such call). It was masked in
+the demo tooling and only surfaced because the demos pipe through VHS; it is a
+latent privacy bug in the shipped CLI. This spec makes `render` treat
+empty/invalid stdin as "no trustworthy payload": render a neutral placeholder,
+read **nothing** from the host, exit 0.
 
 ## Goals
 
-1. A README a first-time visitor can read top-to-bottom and immediately grok
-   **what copilotline is, what it does, and how to try it** — leading with the
-   value proposition and a **zero-prerequisite 60-second trial** (the piped
-   `echo … | copilotline render` smoke test, which needs neither GitHub Copilot
-   CLI nor `gh` auth).
-2. Every command, flag, env var, and behavioral claim in the README matches the
-   shipped `v0.2.1` reality (`src/cli.ts` HELP + CHANGELOG).
-3. The two demo GIFs are generated from the **real CLI output** by a tool that
-   matches copilotline's zero-dependency ethos and carries no recurring
-   transitive-CVE maintenance burden.
-4. The demo regeneration path is documented and reproducible by any maintainer.
-5. No known-vulnerable dependency is introduced anywhere in the repo by this
-   change.
+1. `copilotline render` with **empty** stdin never detects or reads the host
+   Copilot account or quota, and never spawns `gh`/`sqlite3` for account
+   detection. It emits a neutral, account-free placeholder and exits 0.
+2. `copilotline render` with **invalid JSON** behaves the same on stdout (neutral
+   placeholder, no host data, exit 0) and additionally emits a short diagnostic
+   to **stderr** so the malformed input is observable.
+3. A **valid** payload renders exactly as today (full ribbon, account, quota) —
+   no regression to the host-invoked happy path.
+4. `render --json` on empty/invalid stdin emits neutral JSON with **no** host
+   account/quota fields populated, exit 0 (same stderr diagnostic on invalid).
+5. The bare `copilotline` non-TTY invocation (which routes to `runRender`) shares
+   the same guard.
+6. Regression tests assert the empty/invalid paths leak no real account **without**
+   relying on `COPILOTLINE_ACCOUNT=0` / `COPILOTLINE_USAGE=0` to mask detection.
 
 ## Non-Goals
 
-- **No `src/` changes.** No new CLI commands, flags, or rendering behavior.
-- **No npm version bump or release.** (Note: the npm registry README only
-  refreshes on the next publish — see Risks.)
-- **No bilingual README.** English only; a community Spanish translation may be
-  added later if audience demand justifies it.
-- **No repair of the existing Remotion project.** It is removed, not fixed; the
-  unmerged `fix/osv-remotion-transitive-deps` branch is closed as obsolete.
-- **No new marketing collateral** (blog, social, landing page) — README +
-  in-repo demo assets only.
-- **No CI gate that renders demos.** Regeneration stays a manual maintainer
-  step (VHS needs a TTY + ffmpeg); CI is not extended to render GIFs.
+- **No change to the valid-payload render.** Model, context, git, session, and
+  quota segments for a real Copilot payload stay byte-for-byte as today.
+- **The `"Copilot"` model-label fallback for a valid payload that lacks a model
+  name** (`render-status-line.ts:681`) is out of scope — it is cosmetic and only
+  reachable now via the bug. The no-payload placeholder (Goal 1) is a distinct,
+  whole-line label.
+- **Not** reworking how `COPILOTLINE_USAGE=0` interacts with account detection
+  for valid payloads (it suppresses quota but not detection). That is a separate
+  hardening; this spec's payload-presence guard already prevents the empty-stdin
+  leak regardless.
+- **No** new redaction framework, no changes to the quota/account model, no new
+  runtime dependencies.
+- **No** change to exit codes for the happy path; empty/invalid must stay exit 0
+  so the Copilot CLI statusLine integration never surfaces an error.
 
 ## Decisions
 
-- **D-003-01 — Replace Remotion with charmbracelet VHS.** Delete
-  `docs/remotion/` entirely (removing `react`, `react-dom`, `webpack`, and the
-  three `@remotion/*` packages plus their lockfile). Author `.tape` scripts that
-  drive the **real `copilotline` binary** to produce the demos. *Rationale:*
-  copilotline is zero-dependency by design; a React+webpack toolchain for two
-  GIFs is the tail wagging the dog (§10.2 YAGNI, §8 elegance), and VHS demos run
-  the actual CLI so they cannot silently drift from shipped behavior.
-- **D-003-02 — Stable GIF filenames.** Keep `docs/demo-statusline.gif` and
-  `docs/demo-cli.gif` so the README `raw.githubusercontent.com` image URLs and
-  any external links do not break. Only the *content* and the *generator*
-  change.
-- **D-003-03 — README restructured newcomer-first.** Order: one-line what +
-  why → demo GIF → **"See it in 60 seconds"** zero-prereq quickstart → Install
-  → Configure GitHub Copilot CLI → Command reference → Usage & quota → Privacy
-  & security → Troubleshooting → Development → Release → License. The hero is
-  the no-setup piped-`echo` smoke test.
-- **D-003-04 — Factual correction is part of the rewrite.** The canonical
-  `account` command (`--json` / `--auto` / `--set <login>`) replaces the
-  alias-as-primary presentation; `render --capture` is removed; the JSONC text
-  is updated to the v0.2.0 surgical-edit behavior; the `v0.1.0` install example
-  is removed/updated; Node ≥18, the GitHub Copilot CLI prerequisite, the
-  `gh auth` quota prerequisite, the `~/.local/bin` PATH note, and an `npx`
-  zero-install trial path are added.
-- **D-003-05 — English only.** Matches the npm package, source, CHANGELOG, and
-  CONSTITUTION; single source of truth, no drift.
-- **D-003-06 — Demos are PII-free and reproducible.** `.tape` scripts use
-  public-safe sample values only (the README-style sample payload) and disable
-  live usage (`COPILOTLINE_USAGE=0`) or a fixture for the `doctor` demo — no
-  real tokens, accounts, usernames, or private paths in any generated asset.
-- **D-003-07 — Demo regeneration is documented.** Replace
-  `docs/remotion/README.md` with a regeneration guide (new home under `docs/`,
-  e.g. `docs/DEMOS.md` plus the `.tape` files) covering VHS install and the
-  render commands.
+- **D-004-01 — `safeParse` becomes a discriminated result.** Replace the
+  `unknown`-returning `safeParse` (`src/cli.ts:735-745`) with a result that
+  distinguishes the three cases: a non-empty parseable payload, **empty** stdin,
+  and **invalid** JSON. `runRender` branches on this instead of being blind to a
+  collapsed `{}`. *Rationale:* the leak exists precisely because empty and
+  garbage both became `{}`; the fix must restore that distinction at the
+  boundary, not deep in the domain.
+- **D-004-02 — No host reads without a payload.** On the empty/invalid branches,
+  `runRender` must **not** call `selectCopilotAccount`, `quotaForRender`, or
+  `refreshCopilotUsageInBackground`. No account detection, no cache read, no
+  background refresh, no `gh`/`sqlite3` spawn. *Rationale:* this is the actual
+  PII + side-effect fix; gating display alone is insufficient because detection
+  already ran at `cli.ts:137`.
+- **D-004-03 — Neutral placeholder on stdout.** Empty and invalid stdin both
+  print a static, account-free placeholder (`copilotline`) and exit 0. It
+  contains no model, account, login, quota, or git data — nothing derived from
+  the host. *Rationale:* the operator chose a visible neutral marker over a blank
+  line; it must carry zero host-derived data.
+- **D-004-04 — Invalid JSON is distinguished on stderr only.** Invalid JSON adds
+  a single short diagnostic to **stderr** (e.g. `copilotline: ignoring invalid
+  status JSON on stdin`); empty stdin prints no diagnostic. stdout is identical
+  (the placeholder) in both cases, and stderr never carries host data.
+  *Rationale:* the operator asked to distinguish the two; the meaningful,
+  PII-safe difference is an observability signal on stderr, while stdout stays
+  the neutral placeholder per D-004-03.
+- **D-004-05 — `--json` stays neutral too.** `render --json` on empty/invalid
+  stdin emits a neutral JSON object with no host account/quota fields populated
+  (exit 0; invalid adds the D-004-04 stderr diagnostic). *Rationale:* the JSON
+  path shares the same snapshot and would leak the same account fields; it must
+  be guarded identically.
+- **D-004-06 — One guard covers every render entry.** The bare `copilotline`
+  non-TTY path and `render` / `render --json` all route through the same guarded
+  `runRender` branch. *Rationale:* DRY; no second leak surface.
 
 ## Approaches considered
 
-- **A — Repair Remotion in place** (merge the OSV lockfile overrides,
-  `npm install`, regenerate GIFs against v0.2.x UI). Fastest to ship, but keeps
-  the heavy React/webpack tree and the recurring CVE maintenance, and the demo
-  remains a hand-animated mock that can drift from real output. *Rejected.*
-- **B — Replace with VHS (chosen).** Aligns with the zero-dep ethos, eliminates
-  the transitive-CVE surface, and the demos run the real binary so they stay
-  honest. Higher up-front effort (re-author the two animations as `.tape`).
-- **C — Repair install/security only, do not regenerate** — leaves the stale-UI
-  GIFs in the README. *Rejected* (fails Goal 1's visual accuracy).
-- **D — Delete the demo pipeline and the GIFs, text-only README** — kills all
-  maintenance/security surface but removes the visual demo a newcomer benefits
-  from. *Rejected* (weakens comprehension).
+- **A — Guard at the `runRender` boundary (chosen).** Make `safeParse`
+  discriminated (D-004-01) and branch in `runRender` before any host call
+  (D-004-02). Smallest blast radius, fixes both PII and side-effects, leaves the
+  domain untouched. The agent-mapped root cause lives exactly here.
+- **B — Gate only the display (skip the segments when fields are null).** Leaves
+  `selectCopilotAccount`/`quotaForRender` running (still spawns `gh`/`sqlite3`
+  and reads the cache) but drops the segments from the output. *Rejected:* the
+  host reads/side-effects still happen; only the visible symptom is hidden.
+- **C — Require specific payload keys (e.g. `model`) before rendering anything.**
+  Stricter, but risks regressing valid-but-partial payloads the renderer
+  currently tolerates. *Rejected:* over-fits; the empty/invalid discriminant
+  (A) is the precise signal.
 
 ## Acceptance Criteria
 
-1. `docs/remotion/` is deleted; no `react`, `react-dom`, `webpack`, or
-   `@remotion/*` dependency or lockfile remains anywhere in the repo, and a repo
-   dependency/secret scan is clean.
-2. `.tape` script(s) and a regeneration guide exist under `docs/`; running them
-   reproduces `docs/demo-statusline.gif` and `docs/demo-cli.gif` from the **real
-   `copilotline` CLI output** with public-safe sample values only.
-3. `README.md` opens with a concise what + why, shows the demo, then a
-   **zero-prerequisite 60-second trial** (piped `echo … | COPILOTLINE_USAGE=0
-   copilotline render`) before any install/configure section.
-4. Every command, flag, and env var in `README.md` matches `src/cli.ts` HELP and
-   the CHANGELOG: `account` is canonical (with `--auto` / `--set` / `--json`),
-   `render --capture` is gone, JSONC text reflects v0.2.0 surgical editing, and
-   the `v0.1.0` example is removed/updated.
-5. `README.md` documents the GitHub Copilot CLI prerequisite, Node ≥18, the
-   `gh auth` quota prerequisite, the `~/.local/bin` PATH note, and an `npx`
-   trial path.
-6. `README.md` is English; no Spanish file is added.
-7. No real tokens, accounts, usernames, or private repository paths appear in
-   any committed demo asset or `.tape` script.
-8. The unmerged `fix/osv-remotion-transitive-deps` branch is closed as obsolete.
+1. `printf '' | copilotline render` → stdout is exactly the placeholder
+   (`copilotline\n`), exit 0; output contains **no** real login, quota numbers,
+   model, or git branch; **no** `gh` or `sqlite3` process is spawned.
+2. `printf 'not json' | copilotline render` → stdout is the placeholder, exit 0,
+   **and** stderr contains an "invalid"/"ignoring" diagnostic; no host data; no
+   `gh`/`sqlite3` spawn.
+3. A valid status payload (e.g. the README sample) renders the full ribbon
+   exactly as before — model, context %, dir+git, session, quota — proven by an
+   unchanged snapshot/golden assertion.
+4. `printf '' | copilotline render --json` and `printf 'x' | copilotline render
+   --json` emit neutral JSON with no host account/quota fields populated, exit 0.
+5. Bare `copilotline` with empty non-TTY stdin behaves like AC-1.
+6. New tests cover AC-1/AC-2/AC-4 **with account detection NOT disabled** (no
+   `COPILOTLINE_ACCOUNT=0` / `COPILOTLINE_USAGE=0` masking) — e.g. by pointing
+   detection at a fixture account and asserting that account never appears in the
+   output. Existing tests stay green.
+7. No new runtime dependency; `bun test` + `tsc --noEmit` clean.
 
 ## Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|:---:|:---:|------------|
-| npm registry README only refreshes on next publish; npmjs.com shows old README until then | High | Low | Accepted — GitHub-rendered README + raw-served GIFs update on merge to `main` (primary discovery path); a future release republishes |
-| VHS absent in maintainer/CI env (needs TTY + ffmpeg) | Medium | Low | Regeneration is a documented manual step (D-003-07), not CI-gated (Non-Goal); committed GIFs are SoT between regenerations |
-| VHS captures real terminal output → more utilitarian/honest, less "produced" look than hand-animated Remotion | High | Low | Accepted — honesty + zero maintenance outweigh polish |
-| A `.tape` running the live binary captures a real token/account | Low | Critical | D-003-06 mandates fixtures + `COPILOTLINE_USAGE=0`; AC-7 + commit-time `gitleaks` gate enforce it |
-| Removing Remotion abandons in-flight `fix/osv-remotion-transitive-deps` work | Medium | Low | AC-8 closes the branch explicitly; CHANGELOG documents the demo-toolchain change |
-| Demo content drifts again from a future UI change | Low | Medium | VHS runs the real binary, so a re-render reflects current output; document the regen trigger in `docs/DEMOS.md` |
+| A consumer relied on bare `copilotline render` (no stdin) printing their account | Low | Low | That is the bug being fixed; document the change in CHANGELOG. Normal Copilot CLI operation always pipes a valid payload, so the happy path is unaffected. |
+| `render --json` empty-input shape change breaks a script parsing it | Low | Low | The old shape leaked host data (the bug); document the neutral shape in CHANGELOG. exit code stays 0. |
+| Over-tightening the discriminant rejects a valid-but-minimal payload the renderer tolerated | Low | Medium | Only **empty** and **JSON-parse-failure** take the guarded branch; any successfully-parsed object (even sparse) follows the existing render path (AC-3 golden test guards this). |
+| Placeholder line confuses a user who expected nothing | Low | Low | Operator explicitly chose a neutral marker; it is account-free and only appears on misuse (host always sends valid JSON). |
+| Hidden side-effect (`refreshCopilotUsageInBackground`) still fires on a guarded branch | Low | Medium | D-004-02 explicitly removes all three host calls from the empty/invalid branch; a test asserts no background refresh/process spawn. |
