@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-02
+
+### Fixed
+
+- `package.json` `bin` path no longer carries a leading `./` (`dist/cli.js`), which npm silently normalized and warned about on every publish. First release published through the OIDC trusted-publishing pipeline.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
