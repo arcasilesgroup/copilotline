@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-02
+
 ### Added
 
 - A static statusline screenshot (`docs/screenshot.png`) used as the README hero — a faithful, rounded dark card of the real `copilotline render` ribbon, generated PII-free from the offline `octocat` fixture by `docs/fixtures/make-screenshot.sh`.
