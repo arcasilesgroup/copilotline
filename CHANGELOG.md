@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-02
+
+### Fixed
+
+- `copilotline render` no longer hangs forever when run by hand in a terminal. `render` reads a Copilot status JSON payload from stdin (Copilot CLI pipes one via `statusLine.command`); run interactively there is no pipe, so stdin is the TTY and the read blocked waiting for an EOF that never arrives. `render` now detects an interactive TTY on stdin, prints a short usage hint to stderr (it is driven by Copilot CLI, with an example of how to pipe a payload by hand), and exits 0 instead of hanging. The check is stdin-only, so it also covers `copilotline render > file` where stdout is redirected. Copilot CLI always pipes stdin, so the statusline path is unchanged.
+
 ## [0.3.0] - 2026-06-02
 
 ### Added

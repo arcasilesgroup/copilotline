@@ -592,3 +592,70 @@ describe("render contentless-object no-leak guard (spec-005)", () => {
     expect(result.stdout).toMatch(/\d+%/);
   });
 });
+
+describe("render interactive-TTY guard", () => {
+  // `render` reads stdin until EOF. The black-box `run()` harness always pipes
+  // stdin, so it can never reproduce the interactive case where stdin is a TTY
+  // (no pipe → no EOF → the read blocks forever). To exercise that branch
+  // portably (including Windows CI, where a real PTY is unavailable), spawn node
+  // with a tiny pre-import shim that forces `process.stdin.isTTY = true` before
+  // importing the built CLI, plus a hard self-kill so a regression surfaces as a
+  // failing test instead of a hung suite.
+  function runInteractiveRender(extraArgs: string[] = []) {
+    const argvJson = JSON.stringify(["cli", "render", ...extraArgs]);
+    const shim = [
+      "const t = setTimeout(() => { console.error('HANG'); process.exit(99); }, 8000);",
+      "t.unref && t.unref();",
+      "process.stdin.isTTY = true;",
+      `process.argv = [process.argv[0], ...${argvJson}];`,
+      `import(${JSON.stringify(dist)});`,
+    ].join("\n");
+
+    return spawnSync(process.execPath, ["-e", shim], {
+      cwd: root,
+      env: {
+        ...process.env,
+        COPILOTLINE_USAGE: "0",
+        COPILOTLINE_ACCOUNT: "0",
+      },
+      encoding: "utf-8",
+      timeout: 15000,
+    });
+  }
+
+  test("render on a TTY prints a usage hint and exits instead of hanging", () => {
+    const result = runInteractiveRender();
+
+    // Exit 0 (not the 99 self-kill code): the guard returned, it did not hang.
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("HANG");
+    // The hint points the user at the real usage: it is driven by Copilot CLI,
+    // and shows how to pipe a payload by hand.
+    expect(result.stderr).toContain("reads Copilot status JSON from stdin");
+    expect(result.stderr).toContain("statusLine.command");
+    expect(result.stderr).toContain("| copilotline render");
+    // Nothing renders to stdout — no statusline, no neutral placeholder.
+    expect(result.stdout.trim()).toBe("");
+  });
+
+  test("render --json on a TTY also short-circuits to the hint", () => {
+    const result = runInteractiveRender(["--json"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("reads Copilot status JSON from stdin");
+    expect(result.stdout.trim()).toBe("");
+  });
+
+  test("piped render never emits the interactive hint", () => {
+    const result = run([], {
+      stdin: JSON.stringify({
+        model: { displayName: "GPT-5.4" },
+        contextWindow: { usedPercent: 12 },
+      }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("GPT-5.4");
+    expect(result.stderr).not.toContain("reads Copilot status JSON from stdin");
+  });
+});

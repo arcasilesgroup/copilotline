@@ -1,6 +1,6 @@
 {
   "name": "@arcasilesgroup/copilotline",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cross-platform statusline companion for GitHub Copilot CLI",
   "license": "MIT",
   "author": "Arcasiles Group",
