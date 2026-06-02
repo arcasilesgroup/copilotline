@@ -11,10 +11,8 @@ coverage
 .copilotline-captures/
 *.status.json
 usage-cache.json
+!docs/fixtures/usage-cache.json
 usage-refresh.marker
-docs/remotion/node_modules/
-docs/remotion/out/
-docs/remotion/dist/
 
 # Python bytecode (ai-engineering toolkit)
 __pycache__/

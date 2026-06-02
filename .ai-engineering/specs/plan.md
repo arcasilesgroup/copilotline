@@ -1,280 +1,257 @@
 ---
 execution_route:
   version: 1
-  spec: spec-002
-  executor: autopilot
-  automation: autonomous
-  concern_count: 7
-  estimated_files: 20
-  reason: "Full M0-M5 scope spanning 7 concerns (domain model, defensive parser/resolver, renderer label+units+used-only, units config+env, doctor probe, docs, demo/remotion) across ~20 files with TDD pairs — exceeds single-concern build threshold; waved autopilot delivery fits."
-  safe_next_command: "/ai-autopilot"
-spec: spec-002
+  spec: spec-003
+  executor: build
+  automation: assisted
+  concern_count: 2
+  estimated_files: 18
+  reason: "Single cohesive docs + demo-tooling concern. File count is inflated by one mechanical bulk-deletion of docs/remotion/ (~11 files); the substantive concerns are just README accuracy/IA and the Remotion->VHS demo migration. No code (src/) changes, no cross-cutting DAG, no parallel waves — waved autopilot would add ceremony without benefit. Automation is 'assisted' because GIF rendering needs vhs+ffmpeg (absent in this env) and is a manual maintainer step per spec Non-Goal."
+  safe_next_command: "/ai-build"
+spec: spec-003
+slug: readme-and-remotion-repair
+title: README rewrite and demo-pipeline migration to VHS — execution plan
 status: approved
 pipeline: full
+created: 2026-06-02
 ---
 
-# Plan — spec-002 Token-Based Billing Support for copilotline
+# Plan — spec-003 README rewrite + Remotion→VHS demo migration
 
-Contract for execution. Migrate the Copilot quota statusline from
-request/premium-request semantics to token/AI-credit semantics: a unit-aware
-domain model, a defensive parser/resolver that degrades instead of lying,
-credits-by-default display with a first-class count-only clause, units config,
-a doctor probe, and the docs + demo rewrite. Derived from the approved spec
-(`.ai-engineering/specs/spec.md`) and brief
-(`.ai-engineering/specs/drafts/copilot-token-billing-support-brief.md`).
+## Environment facts (read-only exploration, 2026-06-02)
 
-## Design
+- `vhs` **0.11.0** + `ffmpeg` **8.1.1** + `ttyd`: **installed** (operator chose
+  to install, 2026-06-02). → GIF rendering (T-8) is now **automatable by
+  `/ai-build`** in this env. CI is still NOT extended to render (spec Non-Goal);
+  the `.tape` scripts remain the source of truth for future regens.
+- `dist/cli.js`: **present** → README smoke-test and `.tape` scripts can drive
+  the real binary.
+- Root `package.json` `render` script = `bun src/cli.ts render` — **unrelated**
+  to `docs/remotion`. Deleting Remotion needs **no** root-package change.
+- Only repo reference to `docs/remotion` outside the folder itself is
+  `README.md:359` (the "Render README demo GIFs" dev block). The
+  `ai-video-editing` skill mentions Remotion generically — out of scope, leave.
+- Canonical CLI surface (`src/cli.ts` HELP) — the README command table MUST
+  match exactly:
+  `render` / `render --json` / `refresh` / `refresh --json` /
+  `account` / `account --json` / `account --auto` / `account --set <login>` /
+  `install` / `uninstall` / `doctor` / `doctor --json` / `--help` / `--version`.
+  (No `render --capture`. No `accounts` / `use` in the canonical table — they
+  are legacy aliases only.)
 
-Design intent captured at `.ai-engineering/specs/spec-002/design-intent.md`
-(auto-routed from /ai-plan because matched keyword: `ui`). Scope is bounded: it
-reuses the spec-001 statusline design system; the only new visual element is the
-no-allowance used-only clause (D-002-12) and the unit-derived noun (D-002-02).
+## Design (from spec-003 brainstorm; design already settled)
 
-design-routing: routed (matched keyword: ui) — focused design note captured (design system already shipped in spec-001)
+README information architecture was decided during `/ai-brainstorm` via
+`/ai-design` and approved by the operator: **newcomer-first inverted pyramid**.
+No re-interrogation. Section order:
+
+1. Title + 1-line what + 1-line why
+2. Demo GIF (statusline ribbon)
+3. **See it in 60 seconds** — zero-prereq trial (piped `echo` smoke test)
+4. Install (npm / curl-pipe / Windows / npx)
+5. Prerequisites (GitHub Copilot CLI, Node ≥18, `gh auth` for quota)
+6. Configure GitHub Copilot CLI
+7. Command reference (matches `src/cli.ts` HELP)
+8. Usage & quota
+9. Privacy & security
+10. Troubleshooting
+11. Development (VHS demo regen link)
+12. Release
+13. License
+
+Tone: technical-precise, terminal-native (no marketing fluff). Differentiator:
+the no-setup piped-`echo` trial as the hero moment.
 
 ## Architecture
 
-Pattern: **Hexagonal / Ports-and-Adapters** (the project's existing pattern;
-`architecture-patterns.md` is absent in this install — fail-open to the in-tree
-convention). The migration keeps every concern in its current layer:
+`ad-hoc` — documentation + demo tooling. No application architecture touched;
+hexagonal `src/` boundary is untouched (spec Non-Goal).
 
-- **Domain** (`src/domain/status-line.ts`) owns the billing-shape-agnostic
-  `QuotaSnapshot`; gains a `unit` discriminator + `costUsd` +
-  `creditAllowanceSource`. Stays free of GitHub field names.
-- **Infrastructure** (`copilot-usage.ts`, `quota-snapshot.ts`,
-  `copilotline-config.ts`, `value-reader.ts`) absorbs upstream-shape uncertainty:
-  defensive parse, unit-on-absence default, units config + env.
-- **Application** (`render-status-line.ts`, `run-doctor.ts`, `cli.ts`) reads only
-  the domain type: noun/units/used-only render, doctor probe, render wiring.
-- **Presentation** (`doctor-report.ts`) unchanged (new probe row renders via the
-  existing formatter).
+## TDD note
 
-No new runtime dependency. No backwards-compat shim (CLAUDE.md §13 rule 3): the
-`QuotaSnapshot` field change is applied in place; absence of `unit` deserializes
-to `"request"` so a stale cache renders as honest legacy data.
-
-Dependency order: P1 (domain+parser) → P2 (resolver resilience) → P3 (renderer)
-→ P4 (config) → P5 (doctor) → P6 (docs/demo) → P7 (final gate). P3 depends on
-P1; P4/P5 depend on P3; P6 depends on P3+P4+P5; P2 can run alongside P1.
+No unit-testable code changes. The RED-equivalent for each concern is a
+**verification gate** (command-parity grep, secret scan, dead-reference grep)
+defined per task; the terminal verify task (T-9) is the GREEN.
 
 ---
 
-## Phase 1 — Token-aware domain model + parser foundation (spec M1)
+## Phase 1 — Demo toolchain migration (Remotion → VHS)
 
-- [ ] T-1 — Extend `QuotaSnapshot` with `unit` discriminator + `costUsd` + `creditAllowanceSource`
-  - Agent: build
-  - Files: src/domain/status-line.ts:31-47
-  - Principles applied: §10.8 Hexagonal Architecture, §10.7 Clean Code
-  - Patch (deterministic):
-    ```diff
-    @@ src/domain/status-line.ts: export interface QuotaSnapshot
-     export interface QuotaSnapshot {
-       login: string | null;
-       host: string | null;
-       label: string | null;
-    +  unit: "request" | "credit" | "token";
-       usedPercent: number | null;
-       remainingPercent: number | null;
-       entitlement: number | null;
-       remaining: number | null;
-       used: number | null;
-       unlimited: boolean;
-       overageUsed: number | null;
-       overagePermitted: boolean | null;
-    +  costUsd: number | null;
-    +  creditAllowanceSource: string | null;
-       resetAt: string | null;
-       source: string | null;
-       accountSource: string | null;
-       tokenSource: string | null;
-     }
-    ```
-  - Gate: type compiles in isolation; cascades to construction sites (T-2) — phase tsc gate after T-2.
+### T-1 — Author `docs/demo-statusline.tape`
+- Agent: build
+- Files: `docs/demo-statusline.tape` (new)
+- Principles applied: §10.2 YAGNI, §10.7 Clean Code
+- Patch (deterministic): — (judgment: VHS `.tape` authoring)
+- Detail: VHS tape that renders the **full statusline ribbon** by driving the
+  real binary — `echo '<public-safe sample status JSON>' | COPILOTLINE_USAGE=0
+  COPILOTLINE_CACHE_DIR=<committed fixture cache dir> node dist/cli.js render`.
+  Sample values mirror README (`gpt-5.5 · xhigh`, ~47% context, `copilotline`
+  cwd, `main`); the fixture cache supplies a **fabricated** credits snapshot so
+  the quota segment renders with **no network and no token**. Output →
+  `../demo-statusline.gif` (stable filename, D-003-02). Set theme/width/height
+  to keep the ribbon on one line.
+- Gate: tape references only `node dist/cli.js`, `COPILOTLINE_USAGE=0`, and a
+  committed fixture; no real token/login/path strings (`gitleaks` clean).
 
-- [ ] T-2 — Populate `unit`/`costUsd`/`creditAllowanceSource` at EVERY typed `QuotaSnapshot` construction site (src AND tests; default `unit:"request"`, others `null`)
-  - Agent: build
-  - Files: src/application/render-status-line.ts:319-344 (normalizeQuota return), :485-501 (quotaFromHeaderValue), :632-650 (emptyQuota); src/infrastructure/quota-snapshot.ts:36-57 (parseQuotaSnapshot return); src/infrastructure/copilot-usage.ts:357-373 (parseUsageCache), :331-375 (cache absent `unit` → "request"); **tests/render-account.test.ts:18-36 (the `quota()` factory — typed `QuotaSnapshot`)**, **tests/render-status-line.test.ts:136-152 (the typed `deps.quota` literal)**
-  - Principles applied: §10.4 DRY, §10.7 Clean Code
-  - Patch (deterministic): omitted — judgment: each site sets `unit:"request"`, `costUsd:null`, `creditAllowanceSource:null` (behavioral unit-derivation lands later in T-4/T-8). The two TYPED test literals MUST be included or `tsc` (tsconfig `include` covers `tests/**`) fails tree-wide; the loose `Record<string,unknown>` test inputs do not typecheck against `QuotaSnapshot` and need no change here.
-  - Gate: `bun run lint` (tsc strict) green across the WHOLE tree (src + tests) — this is the Phase 1 compile gate.
+### T-2 — Author `docs/demo-cli.tape`
+- Agent: build
+- Files: `docs/demo-cli.tape` (new), fixture cache under `docs/fixtures/` (new, if needed)
+- Principles applied: §10.2 YAGNI, §10.7 Clean Code
+- Patch (deterministic): — (judgment)
+- Detail: VHS tape rendering a `copilotline doctor` reveal from the real binary
+  with `COPILOTLINE_USAGE=0` (and the same fixture cache) so doctor output is
+  deterministic and **never** prints a real token/account. Output →
+  `../demo-cli.gif`.
+- Gate: doctor demo emits no secrets/PII; `gitleaks` clean; tape drives only the
+  local `dist/cli.js`.
 
-- [ ] T-3 — RED: parser tests for unit derivation + unit-on-absence default + token/credit field mapping
-  - Agent: build
-  - Files: tests/quota-snapshot.test.ts:1-34, tests/copilot-usage.test.ts:1-55
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): omitted — judgment: add cases asserting (a) a request-count payload yields `unit:"request"`; (b) a credit/token-shaped snapshot yields `unit:"credit"|"token"`; (c) a cache entry lacking `unit` parses to `"request"`.
-  - Gate: new tests present and RED before T-4.
+### T-3 — Write `docs/DEMOS.md` (regeneration guide)
+- Agent: build
+- Files: `docs/DEMOS.md` (new)
+- Principles applied: §10.7 Clean Code, §10.6 SDD
+- Patch (deterministic): — (judgment)
+- Detail: Replaces the deleted `docs/remotion/README.md`. Covers: VHS + ffmpeg
+  install (`brew install vhs ffmpeg`), `bun run build` first, then
+  `vhs docs/demo-statusline.tape && vhs docs/demo-cli.tape`, the PII rule
+  (public-safe sample values only — no real tokens/accounts/usernames/private
+  paths), and **when** to regenerate (statusline/doctor output changes).
+- Gate: file exists; commands reference real script paths; no machine-specific
+  paths (anonymous-content rule, CLAUDE.md §13 rule 4).
 
-- [ ] T-4 — GREEN: `parseQuotaSnapshot` maps any recognized numeric token/credit field generically; derive `unit`; relax the null guard so a used-only datum survives
-  - Agent: build
-  - Files: src/infrastructure/quota-snapshot.ts:9-58 (drop the `entitlement===null && remaining===null` discard for a usable `used`/token field), :83-88 (computeUsedQuota tolerant); src/infrastructure/copilot-usage.ts:229-257 (parseCopilotUsageResponse carries unit/costUsd)
-  - Principles applied: §10.5 TDD, §10.2 YAGNI (key on shape, not guessed names)
-  - Patch (deterministic): omitted — judgment (defensive parse, D-002-05).
-  - Gate: T-3 tests GREEN; `bun test tests/quota-snapshot.test.ts tests/copilot-usage.test.ts`.
+### T-4 — Delete `docs/remotion/` entirely
+- Agent: build
+- Files: `docs/remotion/**` (delete: package.json, package-lock.json,
+  tsconfig.json, remotion.config.ts, .gitignore, README.md, src/Statusline.tsx,
+  src/Cli.tsx, src/Root.tsx, src/index.ts, src/_helpers.ts)
+- Principles applied: §10.2 YAGNI, CLAUDE.md §13 rule 3 (hard delete, no shim)
+- Patch (deterministic): `git rm -r docs/remotion`
+- Gate: `docs/remotion/` gone; `grep -rn "remotion" --include=*.json
+  --include=*.ts .` (excl node_modules/.git/ai-video-editing skill) returns
+  nothing; no `react`/`react-dom`/`webpack`/`@remotion` left in repo.
 
-## Phase 2 — Resilient resolver / defensive parsing (spec M2) — parallelizable with P1
+## Phase 2 — README rewrite (depends on T-1 for the demo asset reference)
 
-- [ ] T-5 — RED: degradation edge fixtures (empty `quota_snapshots`, unknown key, missing headers, zeroed counts, count-only-no-allowance) assert no-throw + correct degrade
-  - Agent: build
-  - Files: tests/copilot-usage.test.ts, tests/render-status-line.test.ts
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): omitted — judgment.
-  - Gate: edge tests present and RED before T-6.
+### T-5 — Rewrite `README.md` newcomer-first with corrected facts
+- Agent: build
+- Files: `README.md`
+- Principles applied: §10.6 SDD, §10.7 Clean Code, §10.4 DRY
+- Patch (deterministic): — (judgment: full restructure)
+- Detail: Apply the `## Design` section order. Hero = zero-prereq 60-second
+  trial. Fold in ALL D-003-04 factual corrections:
+  - Command table → canonical `account` (`--auto`/`--set`/`--json`); **remove**
+    `render --capture`; keep `accounts`/`use` out of the canonical table (at
+    most a one-line "legacy aliases" footnote).
+  - JSONC text → v0.2.0 surgical-edit behavior (preserves comments); **delete**
+    the stale "JSONC comments disappeared" troubleshooting entry.
+  - **Remove** the `COPILOTLINE_VERSION=v0.1.0` example (or bump to current).
+  - **Add**: Node ≥18, GitHub Copilot CLI prerequisite, `gh auth` quota
+    prerequisite, `~/.local/bin` PATH note, `npx @arcasilesgroup/copilotline
+    doctor` zero-install trial.
+  - Dev section: replace `cd docs/remotion && npm install && npm run
+    render:gif:all` (README:356-362) with a pointer to `docs/DEMOS.md` (VHS).
+  - Keep the two GIF image URLs (stable filenames, D-003-02).
+- Gate: every command/flag in README appears verbatim in `src/cli.ts` HELP; zero
+  occurrences of `--capture`, `npm run render:gif`, `docs/remotion`, or
+  `v0.1.0`; markdown links resolve; English only (no `README.es.md`).
 
-- [ ] T-6 — GREEN: defensive tolerances — unknown `quota_snapshots` keys map generically, absent `x-quota-snapshot-*` headers degrade, malformed payload never throws into the host prompt
-  - Agent: build
-  - Files: src/infrastructure/copilot-usage.ts:229-257; src/application/render-status-line.ts:347-392 (quotaFromSnapshots), :394-436 (quotaFromHeaders)
-  - Principles applied: §10.5 TDD, §10.1 KISS
-  - Patch (deterministic): omitted — judgment.
-  - Gate: T-5 fixtures GREEN; no exception escapes the render path.
+### T-6 — Update `CHANGELOG.md`
+- Agent: build
+- Files: `CHANGELOG.md`
+- Principles applied: §10.7 Clean Code, CLAUDE.md §13 rule 3 (document breakage)
+- Patch (deterministic): — (judgment: changelog prose)
+- Detail: Add an `## [Unreleased]` entry — `Changed`: README rewritten
+  newcomer-first + factual corrections; `Changed`/`Removed`: demo pipeline
+  migrated from Remotion to VHS (`docs/remotion/` removed, `.tape` + `docs/DEMOS.md`
+  added). Note the npm-page README refreshes on next publish.
+- Gate: CHANGELOG parses; entry references the Remotion→VHS swap.
 
-## Phase 3 — Renderer: noun/units, used-only clause, eligibility, unlimited gating (spec M0 + M2)
+## Phase 3 — Cleanup + verification
 
-- [ ] T-7 — RED: renderer tests — noun from `unit` (credits/tokens/premium), used-only clause (no bar/no %/no denominator), `hasQuotaData` accepts token/credit + used-only, unlimited gated on `unit`, empty payload renders nothing
-  - Agent: build
-  - Files: tests/render-status-line.test.ts:15-197, tests/render-account.test.ts:18-36 (migrate the `quota()` factory)
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): omitted — judgment (migrate the request-count/premium assertions to token/credit + add the used-only and empty cases).
-  - Gate: new renderer tests present and RED before T-8.
+### T-7 — Close obsolete branch `fix/osv-remotion-transitive-deps` (MANUAL / maintainer)
+- Agent: guard (advisory) — **manual maintainer action** (outward-facing remote delete)
+- Files: — (git refs only)
+- Principles applied: §10.2 YAGNI
+- Patch (deterministic): — (run manually, fail-open if already gone)
+  ```
+  git branch -D fix/osv-remotion-transitive-deps 2>/dev/null || true
+  git push origin --delete fix/osv-remotion-transitive-deps 2>/dev/null || true
+  ```
+- Gate (AC-8): branch absent locally and on origin.
 
-- [ ] T-8 — GREEN: `quotaSegment` noun mapping + native-unit fallback (D-002-02); first-class used-only clause (D-002-12); widen `hasQuotaData`; used-only path in `formatQuotaCounts`; gate `unlimited` on `unit` (D-002-10)
-  - Agent: build
-  - Files: src/application/render-status-line.ts:597-620 (quotaSegment), :622-630 (hasQuotaData), :744-755 (formatQuotaCounts), :599-605 (noun), :255-345 (normalizeQuota derives `unit` from a stdin `unit`/token-field signal so the synthetic demo literal T-13 and live stdin both render their true unit); src/infrastructure/quota-snapshot.ts:15-16 (unlimited gating)
-  - Principles applied: §10.7 Clean Code, §10.8 Hexagonal Architecture
-  - Patch (deterministic): omitted — judgment; see `.ai-engineering/specs/spec-002/design-intent.md` render shapes 1-4. Note: without the `normalizeQuota` `unit`-read, T-13's `label:"credits"` synthetic literal would still render the request-path noun.
-  - Gate: T-7 GREEN incl. used-only + token-unit + empty-payload; `bun test tests/render-status-line.test.ts tests/render-account.test.ts`.
+### T-8 — Render the two GIFs (build — vhs+ffmpeg now installed)
+- Agent: build
+- Files: `docs/demo-statusline.gif`, `docs/demo-cli.gif` (regenerated binaries)
+- Principles applied: §10.6 SDD
+- Patch (deterministic): `bun run build && vhs docs/demo-statusline.tape && vhs docs/demo-cli.tape`
+- Detail: Depends on T-1/T-2 (`.tape`) and a built `dist/cli.js`. Render both
+  GIFs, then **review for PII** before staging (no real token/account/path).
+  Replaces the stale committed GIFs in place (stable filenames, D-003-02).
+- Gate (AC-2): GIFs reproduce from the `.tape` scripts; visually reflect v0.2.x
+  output; PII-free (`gitleaks` clean on the demo assets).
 
-## Phase 4 — Units/cost config + env override (spec M3)
-
-- [ ] T-9 — RED: config tests — `usage.units` (`credit|token|usd`) + `usage.showCost` parse + defaults + malformed-fallback; `COPILOTLINE_USAGE_UNITS` override
-  - Agent: build
-  - Files: tests/copilotline-config.test.ts
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): omitted — judgment.
-  - Gate: config tests present and RED before T-10.
-
-- [ ] T-10 — GREEN: extend `CopilotlineConfig` with an optional `usage` block (units default `credit`, showCost default `false`); read `COPILOTLINE_USAGE_UNITS`; thread units/showCost into the render path
-  - Agent: build
-  - Files: src/infrastructure/copilotline-config.ts:9-15 (type), :21-48 (read + fail-safe), :61-69 (default); src/infrastructure/copilot-usage.ts:46-49 (env-read sibling for `COPILOTLINE_USAGE_UNITS`); src/cli.ts:128-163 (read config, pass `usage` into the render path); src/application/render-status-line.ts:164-185 (extend `formatStatusLine`/`renderStatusLine` + `quotaSegment` to accept a `usage` option — they take no config today, so this is a deliberate signature change so `usage.units`/`showCost` reach `quotaSegment`)
-  - Principles applied: §10.7 Clean Code, §10.1 KISS
-  - Patch (deterministic): omitted — judgment.
-  - Gate: T-9 GREEN; malformed config still falls back to defaults; `quotaSegment` honors `usage.units` (selecting only among units the payload exposes) and `usage.showCost`.
-
-## Phase 5 — Doctor observability probe (spec M4)
-
-- [ ] T-11 — RED: doctor test — a probe reports whether the upstream response carried token/credit vs legacy request-count fields; update the 4 inline `DoctorInput` literals
-  - Agent: build
-  - Files: tests/run-doctor.test.ts:27-29,59-61,91-93,123-125 (the 4 inline literals must gain the new field or compile breaks)
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): omitted — judgment.
-  - Gate: doctor test present and RED before T-12; all 4 literals updated.
-
-- [ ] T-12 — GREEN: add a `DoctorInput` field for the resolved upstream `unit` (+ token/credit-field presence) and emit an Account `DiagnosticLine`; populate it in `runDoctorCommand`
-  - Agent: build
-  - Files: src/application/run-doctor.ts:8-32 (DoctorInput), :132-180 (Account section line); src/cli.ts:299-323 (populate from the cached/parsed snapshot `unit`)
-  - Principles applied: §10.8 Hexagonal Architecture (no domain change — a new `DiagnosticLine`), §10.7 Clean Code
-  - Patch (deterministic): omitted — judgment (doctor.ts domain types unchanged; reuses `DiagnosticLine`).
-  - Gate: T-11 GREEN; `bun test tests/run-doctor.test.ts`; tsc strict.
-
-## Phase 6 — Docs + demo + synthetic literal (spec M5)
-
-- [ ] T-13 — Update the doctor synthetic-render quota literal to credit semantics
-  - Agent: build
-  - Files: src/cli.ts:279-289
-  - Principles applied: §10.7 Clean Code
-  - Patch (deterministic):
-    ```diff
-    @@ src/cli.ts: runDoctorCommand renderPreview quota
-           quota: {
-             login: "copilot-user",
-             host: "github.com",
-    -        label: "premium",
-    +        label: "credits",
-    +        unit: "credit",
-             usedPercent: 7,
-    -        entitlement: 1_000,
-    -        remaining: 930,
-    +        entitlement: 1_500,
-    +        remaining: 1_395,
-             reset_at: "2026-06-01T00:00:00Z",
-             accountSource: "copilot-config",
-             tokenSource: null,
-           },
-    ```
-  - Gate: doctor render preview shows credit semantics; tsc strict.
-
-- [ ] T-14 — Rewrite the README "Premium usage and quota" section + quota/usage anchors for token/credit billing
-  - Agent: build
-  - Files: README.md:136-167 (section), :141 (example line), :147-151 (premium_models prose), :213-216 (COPILOTLINE_USAGE), :225-234 (cache table), :271-287 (troubleshooting); add `COPILOTLINE_USAGE_UNITS` + `usage.*` config docs
-  - Principles applied: §10.6 SDD
-  - Patch (deterministic): omitted — judgment (prose).
-  - Gate: no stale "premium request" prose; env-var + config reference complete.
-
-- [ ] T-15 — CHANGELOG breaking-change entry under `[Unreleased]`
-  - Agent: build
-  - Files: CHANGELOG.md:17 (### Changed), :24-26 (### Removed `**Breaking:**` convention)
-  - Principles applied: §10.6 SDD, CLAUDE.md §13 rule 3 (document breakage)
-  - Patch (deterministic): omitted — judgment: add a `**Breaking:**` bullet noting the quota segment now describes token/credit billing, the request-count "premium" display is retired as the default, the cache schema changed shape, and `unit`-on-absence keeps legacy caches honest.
-  - Gate: CHANGELOG documents the field/display breakage.
-
-- [ ] T-16 — SECURITY.md endpoint wording refresh
-  - Agent: build
-  - Files: SECURITY.md:47 (endpoint), :77 (internal quota endpoint shape)
-  - Principles applied: §10.6 SDD
-  - Patch (deterministic): omitted — judgment (keep best-effort framing; reflect token/credit metadata). Note (out of scope, flag only): line 51 references the removed `render --capture` flag — do NOT fix here (no scope creep); file a follow-up.
-  - Gate: SECURITY accurately describes the best-effort token/credit fetch.
-
-- [ ] T-17 — MARKETING.md premium wording
-  - Agent: build
-  - Files: docs/MARKETING.md:11, :18, :25
-  - Principles applied: §10.6 SDD
-  - Patch (deterministic): omitted — judgment (prose: "premium quota" → "token/credit usage").
-  - Gate: no stale premium-request framing.
-
-- [ ] T-18 — Remotion demo: drop the hard-coded `/300` request denominator and the `premium` label
-  - Agent: build
-  - Files: docs/remotion/src/Statusline.tsx:40-47 (the `* 300` used calc), :110-126 (the `premium` label + `{used}/300`)
-  - Principles applied: §10.6 SDD, §10.4 DRY
-  - Patch (deterministic): omitted — judgment: render a credit/token example consistent with the new render shapes (allowance-known or count-only); remove the fabricated 300 denominator.
-  - Gate: remotion bundle builds; demo reflects token/credit billing.
-
-## Phase 7 — Final verification gate (release readiness)
-
-- [ ] T-19 — Full verification: tests, types, coverage, no-throw fuzz, host-safety
-  - Agent: verify
-  - Files: (read-only) entire `src/` + `tests/`
-  - Principles applied: §10.5 TDD
-  - Patch (deterministic): n/a (read-only).
-  - Gate: `bun test` all green; `bun run lint` (tsc strict) clean; coverage floor held; malformed-input fuzz never throws; `NO_COLOR`/non-TTY/host-safety paths unchanged.
-
-- [ ] T-20 — Governance + secrets guard
-  - Agent: guard
-  - Files: (advisory) staged changeset
-  - Principles applied: CLAUDE.md §13 (secrets gate, no suppressions, CHANGELOG breakage)
-  - Patch (deterministic): n/a (advisory).
-  - Gate: token never persisted to cache or logged (grep the diff); no `# noqa`/`@ts-ignore`/etc.; CHANGELOG documents the breaking change; gitleaks clean.
+### T-9 — Terminal verification (read-only)
+- Agent: verify
+- Files: repo-wide (read-only)
+- Principles applied: §10.6 SDD, §10.7 Clean Code
+- Patch (deterministic): —
+- Detail: Confirm the automatable acceptance-criteria subset:
+  - AC-1: no `react`/`react-dom`/`webpack`/`@remotion` anywhere; `docs/remotion/`
+    gone.
+  - AC-4: README command parity vs `src/cli.ts` HELP; no `--capture`.
+  - AC-5: prereqs + npx + PATH present in README.
+  - AC-6: English only; no `README.es.md`.
+  - AC-7: `gitleaks` clean on `docs/*.tape`, `docs/fixtures/**`, `docs/DEMOS.md`.
+  - Dead refs: no `docs/remotion`, `npm run render:gif`, `v0.1.0` in README.
+- Gate: all checks pass; report deviations. (AC-2/AC-3-visual and AC-8 are
+  manual, covered by T-7/T-8.)
 
 ---
 
-## Definition of Done (rolls up the spec Goals)
+## Phase ordering & gates
 
-1. Renderer never emits literal "premium" for a token/credit account; noun from `unit`.
-2. `QuotaSnapshot` unit-aware in place; absent `unit` → `"request"`; no parallel type.
-3. Malformed/empty/unknown payload degrades (cache → nothing); never throws.
-4. Credits default with native-unit fallback; percent-of-allowance primary; USD opt-in off.
-5. Used-only clause renders a count with no fabricated denominator (D-002-12).
-6. Defensive resolver tolerates missing fields / unknown keys / vanished headers.
-7. Token never cached or logged; cache stays `0600`.
-8. `usage.units` + `usage.showCost` + `COPILOTLINE_USAGE_UNITS`; malformed config → defaults.
-9. Doctor reports the upstream unit + token/credit-field presence.
-10. All test suites migrated + green; degradation + count-only fixtures added.
-11. README/CHANGELOG/SECURITY/MARKETING + synthetic literal + Remotion demo describe token/credit billing.
-12. Zero new runtime deps; hexagonal boundaries intact.
+- **Phase 1** (T-1…T-4) before **Phase 2** (T-5 references the demo asset + the
+  DEMOS.md link). T-1/T-2/T-3 are independent; T-4 (delete) runs last in the
+  phase to keep tape authoring referenceable if needed.
+- **Phase 2** (T-5, T-6) after Phase 1.
+- **Phase 3**: T-8 (render) after T-1/T-2 + a built `dist/cli.js`; T-9 (verify)
+  last. T-7 (branch remote-delete) is the only **manual maintainer step** —
+  surfaced in the PR body, not blocking the build.
 
-## Risks carried from the spec
+## Automatable vs manual split
 
-- Exact new field names / header persistence / allowance field are `[unsourced]`
-  (spec Open Questions) — confirm against a live token-billed account; the
-  defensive design (D-002-05/12) degrades safely if any stays unknown.
-- The count-only / no-allowance path (D-002-12) is the most likely live shape —
-  its fixture (T-5/T-7) is required, not optional.
+- **Automatable by `/ai-build`**: T-1, T-2, T-3, T-4, T-5, T-6, T-8, T-9.
+- **Manual maintainer (outward-facing remote ref delete)**: T-7 (close
+  `fix/osv-remotion-transitive-deps`). `/ai-pr` surfaces it as a follow-up.
+
+## Quality Remediation
+
+used: true
+max_attempts: 1
+Scope (blocker/high from initial assessment, mechanical + finding-scoped):
+- BLOCKER: `docs/fixtures/usage-cache.json` swallowed by `.gitignore:13`
+  (`usage-cache.json`) → negate for the fixture path + force-add so the demo
+  regenerates from a clean clone (AC-2).
+- HIGH: dangling `docs/remotion` config — remove the `/docs/remotion` npm block
+  from `.github/dependabot.yml` and the dead `docs/remotion/*` rules from
+  `.gitignore` (AC-1).
+Low findings (CHANGELOG branch-name note, spec-003.json state drift, doctor
+`use auto` src hint) are recorded in the PR body, NOT remediated here (the
+doctor hint is a spec Non-Goal src change → follow-up spec).
+final_reassessment: pass
+
+## Quality Outcome
+
+Initial assessment (verify 88/100 + review): 1 blocker + 1 high, corroborated.
+After one bounded remediation pass + deterministic final reassessment:
+**0 blockers, 0 criticals, 0 highs → PASS.**
+- Blocker (fixture gitignored): `.gitignore` negated for `docs/fixtures/usage-cache.json`
+  + force-added → `git check-ignore` clears, `git ls-files` lists it.
+- High (dangling docs/remotion config): removed `/docs/remotion` npm block from
+  `.github/dependabot.yml` + dead `docs/remotion/*` rules from `.gitignore`.
+- Evidence: `src/` unchanged; `bun test` 85 pass / 0 fail; `tsc --noEmit` exit 0;
+  gitleaks clean; dependabot.yml valid (npm:/ + github-actions:/).
+
+## Operator decision (resolved)
+
+- GIF render (T-8): operator chose to **install vhs+ffmpeg now** → `/ai-build`
+  renders fresh v0.2.x GIFs in the same PR. Resolved 2026-06-02.

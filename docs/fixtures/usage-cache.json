@@ -1,0 +1,25 @@
+{
+  "fetchedAt": "2026-06-02T00:00:00.000Z",
+  "account": null,
+  "tokenSource": null,
+  "quota": {
+    "login": null,
+    "host": null,
+    "label": "credits",
+    "unit": "credit",
+    "usedPercent": 13,
+    "remainingPercent": 87,
+    "entitlement": 1500,
+    "remaining": 1305,
+    "used": 195,
+    "unlimited": false,
+    "overageUsed": null,
+    "overagePermitted": null,
+    "costUsd": null,
+    "creditAllowanceSource": null,
+    "resetAt": "2026-07-01T00:00:00Z",
+    "source": "premium_models",
+    "accountSource": null,
+    "tokenSource": null
+  }
+}
