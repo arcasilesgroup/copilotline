@@ -1,0 +1,11 @@
+{
+  "branch": null,
+  "created": "2026-06-02T15:27:19.644892+00:00",
+  "extra": {},
+  "pr": null,
+  "shipped": null,
+  "slug": "harden-empty-object-and-install-demo",
+  "spec_id": "spec-005",
+  "state": "draft",
+  "title": "Harden render against contentless objects + add an install-wizard demo with dummy accounts"
+}

@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -10,14 +9,18 @@ import {
 import {
   installStatusLineMutations,
   uninstallStatusLineMutations,
+  type SettingsMutation,
 } from "./application/configure-status-line.js";
 import { runDoctor } from "./application/run-doctor.js";
 import {
   applySettingsMutations,
+  backupSettingsFile,
   defaultCopilotHome,
   defaultSettingsPath,
   parseSettings,
   readSettingsText,
+  rewriteSettings,
+  SettingsEditConflict,
   writeSettingsText,
 } from "./infrastructure/copilot-settings-file.js";
 import { isCommandAvailable } from "./infrastructure/command-tools.js";
@@ -47,18 +50,20 @@ import {
 } from "./infrastructure/copilot-account.js";
 import {
   defaultCopilotlineConfigPath,
+  readCopilotlineConfig,
   writeCopilotlineConfig,
 } from "./infrastructure/copilotline-config.js";
 import { getGitInfo } from "./infrastructure/git-info.js";
+import { asRecord } from "./infrastructure/value-reader.js";
 import { printDoctorReport } from "./presentation/doctor-report.js";
 import { VERSION } from "./version.js";
+import { readFlagValue } from "./cli-args.js";
 
 const HELP = `copilotline ${VERSION} - statusline companion for GitHub Copilot CLI
 
 Usage:
   copilotline render                      Read Copilot status JSON from stdin and emit a status line
   copilotline render --json               Emit normalized JSON instead of text
-  copilotline render --capture <path>     Save the raw stdin payload for schema discovery
   copilotline refresh                     Fetch and cache Copilot usage from GitHub
   copilotline refresh --json              Emit cached usage as JSON after refresh
   copilotline account                     Configure the Copilot account interactively
@@ -71,6 +76,19 @@ Usage:
   copilotline doctor --json               Emit structured diagnostic JSON
   copilotline --help                      Show this help
   copilotline --version                   Show version
+`;
+
+// Shown when `render` is run by hand in a terminal (stdin is a TTY, so there is
+// no piped status payload). Pointer text, not an error — `render` is invoked by
+// GitHub Copilot CLI, not by the user.
+const RENDER_INTERACTIVE_HINT = `copilotline render reads Copilot status JSON from stdin.
+GitHub Copilot CLI runs it for you via statusLine.command — there is nothing to
+render when you run it by hand, and it would otherwise wait forever for input.
+
+Try it with a piped payload:
+  echo '{"model":{"name":"Copilot"}}' | copilotline render
+
+Run \`copilotline install\` to wire it into Copilot CLI, or \`copilotline --help\` for usage.
 `;
 
 async function main(): Promise<number> {
@@ -133,18 +151,65 @@ async function main(): Promise<number> {
 
 async function runRender(args: string[]): Promise<number> {
   const asJson = args.includes("--json");
-  const capturePath = readFlagValue(args, "--capture");
-  const stdin = await readStandardInput();
 
-  if (capturePath && !stdin.truncated) {
-    writeFileSync(capturePath, stdin.raw, "utf-8");
+  // `render` is a statusline command: Copilot CLI pipes a status JSON payload on
+  // stdin. Run by hand in a terminal there is no pipe, so stdin is the TTY and
+  // the read below would block forever waiting for an EOF that never arrives.
+  // Detect the interactive TTY, point the user at the right usage, and exit
+  // instead of hanging. Copilot CLI always pipes, so it never reaches this
+  // branch. (stdin-only check — also covers `copilotline render > file`, where
+  // stdout is redirected but stdin is still the terminal.)
+  if (process.stdin.isTTY) {
+    process.stderr.write(RENDER_INTERACTIVE_HINT);
+    return 0;
   }
 
+  const stdin = await readStandardInput();
+
   const parsed = safeParse(stdin.raw);
-  const usage = quotaForRender(parsed);
-  const billing = billingForRender(parsed);
-  refreshCopilotUsageInBackground(statusLineCommand(), parsed);
-  const snapshot = buildStatusSnapshot(parsed, {
+
+  // No trustworthy payload (empty or unparseable stdin): never detect or read
+  // the host Copilot account/quota — emit a neutral, account-free placeholder
+  // and exit 0. (spec-004 — PII guard.)
+  //
+  // A parsed object with NO recognized status key (e.g. `{}`, `{"zzz":1}`) is
+  // not a real payload — treat it like empty stdin and never read the host
+  // account. (spec-005 — closes the spec-004 `{}` boundary.)
+  if (parsed.kind !== "payload" || !isRecognizedPayload(parsed.value)) {
+    if (parsed.kind === "invalid") {
+      process.stderr.write(
+        "copilotline: ignoring invalid status JSON on stdin\n",
+      );
+    }
+    if (asJson) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            version: VERSION,
+            generated_at: new Date().toISOString(),
+            truncated_input: stdin.truncated,
+            data: null,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      process.stdout.write("copilotline\n");
+    }
+    return 0;
+  }
+
+  const payload = parsed.value;
+  // Resolve the account once for the whole render; thread it into the
+  // cache-only readers so the render path never re-detects (no gh/sqlite3
+  // foreground spawns).
+  const account = selectCopilotAccount(payload).selected;
+  const usage = quotaForRender(account);
+  const billing = billingForRender(account);
+  refreshCopilotUsageInBackground(statusLineCommand(), account);
+  const usageConfig = readCopilotlineConfig().usage;
+  const snapshot = buildStatusSnapshot(payload, {
     now: () => Date.now(),
     getGitInfo,
     quota: usage,
@@ -167,13 +232,39 @@ async function runRender(args: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(`${formatStatusLine(snapshot, { maxWidth: process.stdout.columns ?? null })}\n`);
+  process.stdout.write(
+    `${formatStatusLine(snapshot, {
+    usage: usageConfig,
+    maxWidth: process.stdout.columns ?? null,
+    })}\n`,
+  );
   return 0;
+}
+
+function applySettingsOrFallback(
+  settingsPath: string,
+  existing: string | undefined,
+  mutations: readonly SettingsMutation[],
+): string {
+  try {
+    return applySettingsMutations(existing, mutations);
+  } catch (error) {
+    if (!(error instanceof SettingsEditConflict)) {
+      throw error;
+    }
+    const backup = backupSettingsFile(settingsPath);
+    process.stderr.write(
+      `copilotline: could not edit ${settingsPath} in place (${error.message}); ` +
+        `${backup ? `backed up to ${backup} and ` : ""}rewrote it without comments.\n`,
+    );
+    return rewriteSettings(existing, mutations);
+  }
 }
 
 async function runInstall(args: string[]): Promise<number> {
   const settingsPath = defaultSettingsPath();
-  const next = applySettingsMutations(
+  const next = applySettingsOrFallback(
+    settingsPath,
     readSettingsText(settingsPath),
     installStatusLineMutations({
       command: statusLineCommand(),
@@ -194,11 +285,14 @@ function runUninstall(): number {
   const existing = readSettingsText(settingsPath);
 
   if (existing === undefined) {
-    process.stdout.write(`copilotline not installed. ${settingsPath} does not exist.\n`);
+    process.stdout.write(
+      `copilotline not installed. ${settingsPath} does not exist.\n`,
+    );
     return 0;
   }
 
-  const next = applySettingsMutations(
+  const next = applySettingsOrFallback(
+    settingsPath,
     existing,
     uninstallStatusLineMutations(),
   );
@@ -220,7 +314,11 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       const settings = parseSettings(settingsText);
       const statusLine = settings["statusLine"];
 
-      if (typeof statusLine === "object" && statusLine !== null && !Array.isArray(statusLine)) {
+      if (
+        typeof statusLine === "object" &&
+        statusLine !== null &&
+        !Array.isArray(statusLine)
+      ) {
         const command = (statusLine as { command?: unknown }).command;
         if (typeof command === "string" && command.trim() !== "") {
           statusLineCommandValue = command;
@@ -228,7 +326,11 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       }
 
       const footer = settings["footer"];
-      if (typeof footer === "object" && footer !== null && !Array.isArray(footer)) {
+      if (
+        typeof footer === "object" &&
+        footer !== null &&
+        !Array.isArray(footer)
+      ) {
         const showCustom = (footer as { showCustom?: unknown }).showCustom;
         if (typeof showCustom === "boolean") {
           customStatusVisible = showCustom;
@@ -249,16 +351,18 @@ async function runDoctorCommand(args: string[]): Promise<number> {
       model: { displayName: "GPT-5.4" },
       cwd: process.cwd(),
       contextWindow: { usedPercent: 42 },
-      session: { startedAt: new Date(Date.now() - 65 * 60 * 1000).toISOString() },
+      session: {
+        startedAt: new Date(Date.now() - 65 * 60 * 1000).toISOString(),
+      },
       agent: { name: "task" },
       quota: {
         login: "copilot-user",
-        host: "github.com",
-        label: "premium",
+        unit: "credit",
+        label: "credits",
         usedPercent: 7,
-        entitlement: 1_000,
-        remaining: 930,
-        reset_at: "2026-06-01T00:00:00Z",
+        entitlement: 1_500,
+        remaining: 1_395,
+        reset_at: "2026-07-01T00:00:00Z",
         accountSource: "copilot-config",
         tokenSource: null,
       },
@@ -295,6 +399,7 @@ async function runDoctorCommand(args: string[]): Promise<number> {
     tokenAvailableForSelectedAccount: tokenStatus.available,
     tokenSourceForSelectedAccount: tokenStatus.source,
     tokenErrorForSelectedAccount: tokenStatus.error,
+    quotaUnit: quotaForRender(accountSelection.selected)?.unit ?? null,
   });
 
   if (args.includes("--json")) {
@@ -359,9 +464,15 @@ async function runRefreshCommand(args: string[]): Promise<number> {
         )}\n`,
       );
     } else if (!quiet) {
-      const refreshedPaths = [usage ? usageCachePath(usage.account) : null, billing ? billingCachePath(billing.account) : null]
-        .filter((value): value is string => value !== null);
-      process.stdout.write(`copilotline cache refreshed${refreshedPaths.length > 0 ? ` in ${refreshedPaths.join(", ")}` : ""}\n`);
+      const refreshedPaths = [
+        usage ? usageCachePath(usage.account) : null,
+        billing ? billingCachePath(billing.account) : null,
+      ].filter((value): value is string => value !== null);
+      process.stdout.write(
+        `copilotline cache refreshed${
+          refreshedPaths.length > 0 ? ` in ${refreshedPaths.join(", ")}` : ""
+        }\n`,
+      );
     }
     return 0;
   }
@@ -383,10 +494,14 @@ async function runRefreshCommand(args: string[]): Promise<number> {
       )}\n`,
     );
   } else if (!quiet) {
-    process.stderr.write(`copilotline refresh failed: ${usageError ?? billingError ?? "Failed to refresh copilotline cache"}\n`);
+    process.stderr.write(
+      `copilotline refresh failed: ${
+        usageError ?? billingError ?? "Failed to refresh copilotline cache"
+      }\n`,
+    );
   }
 
-  return usageError === null ? 0 : 1;
+  return 1;
 }
 
 interface EnrichedAccount extends AccountIdentity {
@@ -482,7 +597,10 @@ async function enrichAccounts(
   return enriched;
 }
 
-function formatAccountList(selection: ReturnType<typeof selectCopilotAccount>, enriched: EnrichedAccount[]): string {
+function formatAccountList(
+  selection: ReturnType<typeof selectCopilotAccount>,
+  enriched: EnrichedAccount[],
+): string {
   const lines = [
     `mode: ${selection.mode}`,
     `system: ${displayAccount(selection.system)}`,
@@ -497,11 +615,15 @@ function formatAccountList(selection: ReturnType<typeof selectCopilotAccount>, e
       const marks = [
         account.selected ? "selected" : null,
         account.system ? "system" : null,
-      ].filter(Boolean).join(", ");
+      ]
+        .filter(Boolean)
+        .join(", ");
       const token = account.token.available
         ? `token: ${account.token.source}`
         : `token: missing`;
-      const cache = account.cache ? `cache: ${account.cache.fetchedAt}` : "cache: none";
+      const cache = account.cache
+        ? `cache: ${account.cache.fetchedAt}`
+        : "cache: none";
       lines.push(
         `${displayAccount(account)} (${sourceLabel(account.source)}${marks ? `, ${marks}` : ""}) - ${token}; ${cache}`,
       );
@@ -518,8 +640,12 @@ async function runInteractiveAccountSetup(
   printAccountHeader(selection);
 
   if (accounts.length === 0) {
-    process.stdout.write(`${style("No GitHub/Copilot accounts detected.", "yellow")}\n`);
-    process.stdout.write("Run `copilot login` or `gh auth login`, then run `copilotline account` again.\n");
+    process.stdout.write(
+      `${style("No GitHub/Copilot accounts detected.", "yellow")}\n`,
+    );
+    process.stdout.write(
+      "Run `copilot login` or `gh auth login`, then run `copilotline account` again.\n",
+    );
     return 1;
   }
 
@@ -530,7 +656,8 @@ async function runInteractiveAccountSetup(
       account: null,
       selected: selection.mode === "auto",
       tokenAvailable: selection.selected
-        ? accounts.find((account) => sameAccount(account, selection.selected))?.token.available ?? false
+        ? (accounts.find((account) => sameAccount(account, selection.selected))
+            ?.token.available ?? false)
         : false,
     },
     ...accounts.map((account) => ({
@@ -545,15 +672,23 @@ async function runInteractiveAccountSetup(
   process.stdout.write(`${style("Choose quota account", "cyan")}\n\n`);
   options.forEach((option, index) => {
     const marker = option.selected ? style("●", "green") : "○";
-    const token = option.tokenAvailable ? style("token ok", "green") : style("token missing", "yellow");
-    process.stdout.write(`  ${style(String(index + 1).padStart(2), "dim")}. ${marker} ${option.label} ${style("·", "dim")} ${token}\n`);
+    const token = option.tokenAvailable
+      ? style("token ok", "green")
+      : style("token missing", "yellow");
+    process.stdout.write(
+      `  ${style(String(index + 1).padStart(2), "dim")}. ${marker} ${option.label} ${style("·", "dim")} ${token}\n`,
+    );
   });
   process.stdout.write("\n");
 
-  const answer = await prompt(`Select [1-${options.length}] (Enter keeps current): `);
+  const answer = await prompt(
+    `Select [1-${options.length}] (Enter keeps current): `,
+  );
   const trimmed = answer.trim();
   if (trimmed === "") {
-    process.stdout.write(`${style("Keeping current account configuration.", "dim")}\n`);
+    process.stdout.write(
+      `${style("Keeping current account configuration.", "dim")}\n`,
+    );
     return 0;
   }
 
@@ -586,18 +721,26 @@ async function runInteractiveAccountSetup(
   return 0;
 }
 
-function printAccountHeader(selection: ReturnType<typeof selectCopilotAccount>): void {
+function printAccountHeader(
+  selection: ReturnType<typeof selectCopilotAccount>,
+): void {
   process.stdout.write(`${style("┌─ copilotline account", "cyan")}\n`);
   process.stdout.write(`${style("│", "cyan")} mode     ${selection.mode}\n`);
-  process.stdout.write(`${style("│", "cyan")} system   ${displayAccount(selection.system)}\n`);
-  process.stdout.write(`${style("│", "cyan")} selected ${displayAccount(selection.selected)}\n`);
+  process.stdout.write(
+    `${style("│", "cyan")} system   ${displayAccount(selection.system)}\n`,
+  );
+  process.stdout.write(
+    `${style("│", "cyan")} selected ${displayAccount(selection.selected)}\n`,
+  );
   process.stdout.write(`${style("└────────────────────", "cyan")}\n\n`);
 }
 
 async function runUseAliasCommand(args: string[]): Promise<number> {
   const login = args[0];
   if (!login) {
-    process.stderr.write("usage: copilotline account --auto | copilotline account --set <login>\n");
+    process.stderr.write(
+      "usage: copilotline account --auto | copilotline account --set <login>\n",
+    );
     return 2;
   }
 
@@ -611,16 +754,22 @@ async function runUseAliasCommand(args: string[]): Promise<number> {
 
 function setAccountAuto(): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "auto", login: null, host: null },
   });
-  process.stdout.write(`${style("✓", "green")} copilotline will follow the active Copilot account (${defaultCopilotlineConfigPath()})\n`);
+  process.stdout.write(
+    `${style("✓", "green")} copilotline will follow the active Copilot account (${defaultCopilotlineConfigPath()})\n`,
+  );
 }
 
 function setAccountManual(login: string, host: string): void {
   writeCopilotlineConfig({
+    ...readCopilotlineConfig(),
     account: { mode: "manual", login, host },
   });
-  process.stdout.write(`${style("✓", "green")} copilotline pinned to ${login} (${defaultCopilotlineConfigPath()})\n`);
+  process.stdout.write(
+    `${style("✓", "green")} copilotline pinned to ${login} (${defaultCopilotlineConfigPath()})\n`,
+  );
 }
 
 function shouldPromptDuringInstall(args: string[]): boolean {
@@ -644,7 +793,10 @@ async function prompt(question: string): Promise<string> {
   }
 }
 
-function style(text: string, name: "cyan" | "green" | "yellow" | "dim"): string {
+function style(
+  text: string,
+  name: "cyan" | "green" | "yellow" | "dim",
+): string {
   if (process.env["NO_COLOR"] !== undefined || process.env["TERM"] === "dumb") {
     return text;
   }
@@ -659,7 +811,10 @@ function style(text: string, name: "cyan" | "green" | "yellow" | "dim"): string 
 }
 
 function statusLineCommand(): string {
-  return fileURLToPath(import.meta.url);
+  // Normalize to forward slashes so the path written into settings.json is
+  // cross-platform: Node accepts "/" on Windows, and it avoids backslash
+  // escaping in the JSON command string.
+  return fileURLToPath(import.meta.url).replaceAll("\\", "/");
 }
 
 function readCopilotVersion(): string | null {
@@ -678,7 +833,10 @@ function readCopilotVersion(): string | null {
   return match?.[1] ?? null;
 }
 
-function sameAccount(a: AccountIdentity | null, b: AccountIdentity | null): boolean {
+function sameAccount(
+  a: AccountIdentity | null,
+  b: AccountIdentity | null,
+): boolean {
   return Boolean(
     a &&
     b &&
@@ -687,15 +845,122 @@ function sameAccount(a: AccountIdentity | null, b: AccountIdentity | null): bool
   );
 }
 
-function safeParse(raw: string): unknown {
+type ParsedStdin =
+  | { kind: "payload"; value: unknown }
+  | { kind: "empty" }
+  | { kind: "invalid" };
+
+const RECOGNIZED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  // The set of recognized top-level keys read by buildStatusSnapshot,
+  // normalizeModel/Context/Quota/Session, quotaFromSnapshots/Headers,
+  // accountLoginFromInput, and selectCopilotAccount. This is NOT the
+  // exhaustive authoritative union: header-bag payloads (`x-quota-snapshot-*`)
+  // are matched separately in isRecognizedPayload. Keep this in sync with the
+  // render/account read paths in render-status-line.ts / copilot-account.ts.
+  "model",
+  "previewModel",
+  "effort",
+  "effort_level",
+  "effortLevel",
+  "reasoning",
+  "agent",
+  "mode",
+  "task",
+  "session",
+  "session_id",
+  "sessionId",
+  "cost",
+  "context_window",
+  "contextWindow",
+  "context",
+  "cwd",
+  "workingDirectory",
+  "workspace",
+  "quota_snapshots",
+  "quotaSnapshots",
+  "copilot_quota_snapshots",
+  "copilotQuotaSnapshots",
+  "usage",
+  "response",
+  "request",
+  "event",
+  "headers",
+  "quota_headers",
+  "quotaHeaders",
+  "quota",
+  "quota_window",
+  "quotaWindow",
+  "quota_reset_date",
+  "quotaResetDate",
+  "quota_reset_date_utc",
+  "quotaResetDateUtc",
+  "account",
+  "github",
+  "user",
+  "authentication",
+  "copilot",
+]);
+
+// A recognized key carries content only when its value is meaningful: a
+// name-only match (e.g. `{"model":{}}`) is contentless and must route down the
+// placeholder branch, never reaching selectCopilotAccount (spec-005 leak class).
+// Numeric 0 and boolean false ARE meaningful (e.g. used_percent: 0); empty
+// object/array, empty/whitespace string, and null/undefined are NOT.
+function isMeaningfulValue(v: unknown): boolean {
+  if (v === null || v === undefined) {
+    return false;
+  }
+  if (Array.isArray(v)) {
+    return v.length > 0;
+  }
+  if (typeof v === "object") {
+    return Object.keys(v).length > 0;
+  }
+  if (typeof v === "string") {
+    return v.trim().length > 0;
+  }
+  // number (incl 0) and boolean (incl false) are meaningful.
+  return true;
+}
+
+// Flat header-bag keys (e.g. `{"x-quota-snapshot-premium_models":"..."}`) are
+// read by quotaFromHeaders via its `?? asRecord(input)` top-level fallback, but
+// are not in RECOGNIZED_PAYLOAD_KEYS, so they are matched by pattern here.
+const QUOTA_HEADER_KEY_PATTERN = /^x-quota-snapshot-/i;
+
+function isRecognizedPayload(value: unknown): boolean {
+  const record = asRecord(value);
+  if (record === undefined) {
+    return false;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (RECOGNIZED_PAYLOAD_KEYS.has(key) && isMeaningfulValue(entry)) {
+      return true;
+    }
+    if (
+      QUOTA_HEADER_KEY_PATTERN.test(key) &&
+      typeof entry === "string" &&
+      entry.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function safeParse(raw: string): ParsedStdin {
   if (raw.trim() === "") {
-    return {};
+    return { kind: "empty" };
   }
 
   try {
-    return JSON.parse(raw) as unknown;
+    const value = JSON.parse(raw) as unknown;
+    if (asRecord(value) === undefined) {
+      return { kind: "invalid" };
+    }
+    return { kind: "payload", value };
   } catch {
-    return {};
+    return { kind: "invalid" };
   }
 }
 
@@ -717,15 +982,6 @@ async function readStandardInput(
   }
 
   return { raw: Buffer.concat(chunks).toString("utf-8"), truncated: false };
-}
-
-function readFlagValue(args: string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-
-  return args[index + 1];
 }
 
 try {

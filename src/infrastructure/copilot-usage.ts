@@ -1,10 +1,18 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { QuotaSnapshot } from "../domain/status-line.js";
 import { shouldRefreshBillingCache } from "./copilot-billing.js";
 import { asRecord } from "./value-reader.js";
+import { normalizeQuotaUnit, parseQuotaSnapshot } from "./quota-snapshot.js";
 import {
   cacheAccountKey,
   displayAccount,
@@ -13,6 +21,7 @@ import {
   usageApiBaseForHost,
   type AccountIdentity,
   type FetchLike,
+  type ResolveTokenOptions,
   type TokenResolution,
 } from "./copilot-account.js";
 
@@ -50,8 +59,12 @@ export function copilotUsageEnabled(): boolean {
 
 export function usageCachePath(account?: AccountIdentity | null): string {
   const explicit = process.env["COPILOTLINE_CACHE_DIR"];
-  const cacheRoot = explicit && explicit.trim() !== "" ? explicit : defaultCacheDir();
-  return join(cacheRoot, account ? `${cacheAccountKey(account)}.${CACHE_FILE}` : CACHE_FILE);
+  const cacheRoot =
+    explicit && explicit.trim() !== "" ? explicit : defaultCacheDir();
+  return join(
+    cacheRoot,
+    account ? `${cacheAccountKey(account)}.${CACHE_FILE}` : CACHE_FILE,
+  );
 }
 
 export function readCachedCopilotUsage(
@@ -71,7 +84,9 @@ export function readCachedCopilotUsage(
     }
 
     const fetchedMs = Date.parse(parsed.fetchedAt);
-    const ageMs = Number.isFinite(fetchedMs) ? Math.max(0, now() - fetchedMs) : Number.POSITIVE_INFINITY;
+    const ageMs = Number.isFinite(fetchedMs)
+      ? Math.max(0, now() - fetchedMs)
+      : Number.POSITIVE_INFINITY;
     return { cache: parsed, ageMs };
   } catch {
     return null;
@@ -88,33 +103,42 @@ export function writeCachedCopilotUsage(cache: UsageCache): void {
   setPrivateMode(path, 0o600);
 }
 
-export async function fetchCopilotUsage(options: FetchCopilotUsageOptions): Promise<QuotaSnapshot> {
+export async function fetchCopilotUsage(
+  options: FetchCopilotUsageOptions,
+): Promise<QuotaSnapshot> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 5_000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetchImpl(`${usageApiBaseForHost(options.host ?? "github.com")}/copilot_internal/user`, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `token ${options.token.trim()}`,
-        "Editor-Version": "copilotline/0.1.0",
-        "Editor-Plugin-Version": "copilotline/0.1.0",
-        "User-Agent": "copilotline",
-        "X-GitHub-Api-Version": API_VERSION,
+    const response = await fetchImpl(
+      `${usageApiBaseForHost(options.host ?? "github.com")}/copilot_internal/user`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `token ${options.token.trim()}`,
+          "Editor-Version": "copilotline/0.1.0",
+          "Editor-Plugin-Version": "copilotline/0.1.0",
+          "User-Agent": "copilotline",
+          "X-GitHub-Api-Version": API_VERSION,
+        },
+        signal: controller.signal,
       },
-      signal: controller.signal,
-    });
+    );
 
     if (!response.ok) {
-      throw new Error(`GitHub Copilot usage API returned HTTP ${response.status}`);
+      throw new Error(
+        `GitHub Copilot usage API returned HTTP ${response.status}`,
+      );
     }
 
     const quota = parseCopilotUsageResponse(await response.json());
     if (!quota) {
-      throw new Error("GitHub Copilot usage API did not include usable quota data");
+      throw new Error(
+        "GitHub Copilot usage API did not include usable quota data",
+      );
     }
 
     return quota;
@@ -142,7 +166,11 @@ export async function refreshCopilotUsageCache(
   const selectedAccount =
     options.account ??
     (options.login
-      ? { login: options.login, host: options.host ?? "github.com", source: "manual" as const }
+      ? {
+          login: options.login,
+          host: options.host ?? "github.com",
+          source: "manual" as const,
+        }
       : selectCopilotAccount(options.input).selected);
   const tokenResolution = await tokenForRefresh(selectedAccount, options);
   if (!tokenResolution) {
@@ -181,33 +209,36 @@ export async function refreshCopilotUsageCache(
   return cache;
 }
 
-export function quotaForRender(input?: unknown, now: () => number = Date.now): QuotaSnapshot | null {
+export function quotaForRender(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): QuotaSnapshot | null {
   if (!copilotUsageEnabled()) {
     return null;
   }
 
-  const account = selectCopilotAccount(input).selected;
   return readCachedCopilotUsage(account, now)?.cache.quota ?? null;
 }
 
-export function shouldRefreshUsageCache(input?: unknown, now: () => number = Date.now): boolean {
+export function shouldRefreshUsageCache(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): boolean {
   if (!copilotUsageEnabled()) {
     return false;
   }
 
-  const account = selectCopilotAccount(input).selected;
   const cached = readCachedCopilotUsage(account, now);
   return cached === null || cached.ageMs >= CACHE_TTL_MS;
 }
 
 export function refreshCopilotUsageInBackground(
   commandPath: string,
-  input?: unknown,
+  account: AccountIdentity | null,
   now: () => number = Date.now,
 ): void {
-  const account = selectCopilotAccount(input).selected;
-  const usageStale = shouldRefreshUsageCache(input, now);
-  const billingStale = shouldRefreshBillingCache(input, now);
+  const usageStale = shouldRefreshUsageCache(account, now);
+  const billingStale = shouldRefreshBillingCache(account, now);
   if ((!usageStale && !billingStale) || refreshRecentlyStarted(account, now)) {
     return;
   }
@@ -240,19 +271,46 @@ export function parseCopilotUsageResponse(data: unknown): QuotaSnapshot | null {
   ];
   const resetAt = readString(record?.["quota_reset_date"]);
 
+  // D-002-05: a credit/token snapshot (token-based billing) wins over the legacy
+  // request-count shape, whether it arrives under a known or an unknown key.
+  // Otherwise the first usable request-count snapshot (in priority order) wins.
+  let requestQuota: QuotaSnapshot | null = null;
   for (const [source, label] of candidates) {
     const snapshot = asRecord(snapshots[source]);
     if (!snapshot) {
       continue;
     }
-
-    const quota = quotaFromSnapshot(snapshot, label, source, resetAt);
-    if (quota) {
+    const quota = parseQuotaSnapshot(snapshot, label, source, resetAt);
+    if (!quota) {
+      continue;
+    }
+    if (quota.unit !== "request") {
       return quota;
     }
+    requestQuota ??= quota;
   }
 
-  return null;
+  const known = new Set(candidates.map(([source]) => source));
+  let unknownRequest: QuotaSnapshot | null = null;
+  for (const key of Object.keys(snapshots)) {
+    if (known.has(key)) {
+      continue;
+    }
+    const snapshot = asRecord(snapshots[key]);
+    if (!snapshot) {
+      continue;
+    }
+    const quota = parseQuotaSnapshot(snapshot, key, key, resetAt);
+    if (!quota) {
+      continue;
+    }
+    if (quota.unit !== "request") {
+      return quota;
+    }
+    unknownRequest ??= quota;
+  }
+
+  return requestQuota ?? unknownRequest;
 }
 
 export function readGitHubToken(): string | null {
@@ -303,18 +361,14 @@ async function tokenForRefresh(
     return null;
   }
 
-  const resolveOptions: {
-    fetchImpl?: FetchLike;
-    timeoutMs?: number;
-  } = {};
-  if (options.fetchImpl) {
-    resolveOptions.fetchImpl = options.fetchImpl;
+  const tokenOptions: ResolveTokenOptions = {};
+  if (options.fetchImpl !== undefined) {
+    tokenOptions.fetchImpl = options.fetchImpl;
   }
   if (options.timeoutMs !== undefined) {
-    resolveOptions.timeoutMs = options.timeoutMs;
+    tokenOptions.timeoutMs = options.timeoutMs;
   }
-
-  return await resolveTokenForAccount(account, resolveOptions);
+  return await resolveTokenForAccount(account, tokenOptions);
 }
 
 function withAccountMetadata(
@@ -331,48 +385,6 @@ function withAccountMetadata(
   };
 }
 
-function quotaFromSnapshot(
-  snapshot: Record<string, unknown>,
-  label: string,
-  source: string,
-  resetAt: string | null,
-): QuotaSnapshot | null {
-  const unlimited = readBoolean(snapshot["unlimited"]) ?? false;
-  const entitlement = readNumber(snapshot["entitlement"]);
-  const remaining = readNumber(snapshot["remaining"]);
-  const remainingPercent = clampPercent(readNumber(snapshot["percent_remaining"]));
-  const used = entitlement !== null && remaining !== null ? Math.max(0, entitlement - remaining) : null;
-  const usedPercent = unlimited
-    ? 0
-    : remainingPercent !== null
-      ? 100 - remainingPercent
-      : entitlement !== null && entitlement > 0 && used !== null
-        ? clampPercent((used / entitlement) * 100)
-        : null;
-
-  if (!unlimited && usedPercent === null && entitlement === null && remaining === null) {
-    return null;
-  }
-
-  return {
-    login: null,
-    host: null,
-    label,
-    usedPercent,
-    remainingPercent,
-    entitlement,
-    remaining,
-    used,
-    unlimited,
-    overageUsed: readNumber(snapshot["overage_count"]),
-    overagePermitted: readBoolean(snapshot["overage_permitted"]),
-    resetAt: readString(snapshot["reset_date"]) ?? resetAt,
-    source,
-    accountSource: null,
-    tokenSource: null,
-  };
-}
-
 function parseUsageCache(value: unknown): UsageCache | null {
   const record = asRecord(value);
   const fetchedAt = readString(record?.["fetchedAt"]);
@@ -385,24 +397,37 @@ function parseUsageCache(value: unknown): UsageCache | null {
   const label = readString(quotaRecord["label"]);
   const source = readString(quotaRecord["source"]);
   const accountRecord = asRecord(record?.["account"]);
-  const login = readString(accountRecord?.["login"]) ?? readString(quotaRecord["login"]);
-  const host = readString(accountRecord?.["host"]) ?? readString(quotaRecord["host"]);
-  const accountSource = readString(accountRecord?.["source"]) ?? readString(quotaRecord["accountSource"]);
+  const login =
+    readString(accountRecord?.["login"]) ?? readString(quotaRecord["login"]);
+  const host =
+    readString(accountRecord?.["host"]) ?? readString(quotaRecord["host"]);
+  const accountSource =
+    readString(accountRecord?.["source"]) ??
+    readString(quotaRecord["accountSource"]);
   const account = login
     ? {
         login,
         host: host ?? "github.com",
-        source: accountSource === "manual" ? "manual" as const : "copilot-config" as const,
+        source:
+          accountSource === "manual"
+            ? ("manual" as const)
+            : ("copilot-config" as const),
       }
     : null;
   return {
     fetchedAt,
     account,
-    tokenSource: readString(record?.["tokenSource"]) ?? readString(quotaRecord["tokenSource"]),
+    tokenSource:
+      readString(record?.["tokenSource"]) ??
+      readString(quotaRecord["tokenSource"]),
     quota: {
       login,
       host,
       label,
+      // D-002-01: a cache entry written before the token-billing migration
+      // lacks `unit`; default it to "request" so a stale cache renders as honest
+      // legacy data rather than a mislabeled token snapshot.
+      unit: normalizeQuotaUnit(readString(quotaRecord["unit"])) ?? "request",
       usedPercent: readNumber(quotaRecord["usedPercent"]),
       remainingPercent: readNumber(quotaRecord["remainingPercent"]),
       entitlement: readNumber(quotaRecord["entitlement"]),
@@ -411,6 +436,8 @@ function parseUsageCache(value: unknown): UsageCache | null {
       unlimited: readBoolean(quotaRecord["unlimited"]) ?? false,
       overageUsed: readNumber(quotaRecord["overageUsed"]),
       overagePermitted: readBoolean(quotaRecord["overagePermitted"]),
+      costUsd: readNumber(quotaRecord["costUsd"]),
+      creditAllowanceSource: readString(quotaRecord["creditAllowanceSource"]),
       resetAt: readString(quotaRecord["resetAt"]),
       source,
       accountSource,
@@ -420,7 +447,12 @@ function parseUsageCache(value: unknown): UsageCache | null {
 }
 
 function findGhCommand(): string | null {
-  const candidates = [process.env["GH_PATH"], "/opt/homebrew/bin/gh", "/usr/local/bin/gh", "gh"];
+  const candidates = [
+    process.env["GH_PATH"],
+    "/opt/homebrew/bin/gh",
+    "/usr/local/bin/gh",
+    "gh",
+  ];
   for (const candidate of candidates) {
     if (!candidate || candidate.trim() === "") {
       continue;
@@ -443,7 +475,10 @@ function findGhCommand(): string | null {
   return null;
 }
 
-function refreshRecentlyStarted(account: AccountIdentity | null, now: () => number): boolean {
+function refreshRecentlyStarted(
+  account: AccountIdentity | null,
+  now: () => number,
+): boolean {
   const markerPath = refreshMarkerPath(account);
   try {
     const marker = statSync(markerPath);
@@ -453,7 +488,10 @@ function refreshRecentlyStarted(account: AccountIdentity | null, now: () => numb
   }
 }
 
-function markRefreshStarted(account: AccountIdentity | null, now: () => number): void {
+function markRefreshStarted(
+  account: AccountIdentity | null,
+  now: () => number,
+): void {
   const markerPath = refreshMarkerPath(account);
   ensurePrivateDirectory(dirname(markerPath));
   writeFileSync(markerPath, String(now()), { encoding: "utf-8", mode: 0o600 });
@@ -461,7 +499,9 @@ function markRefreshStarted(account: AccountIdentity | null, now: () => number):
 }
 
 function refreshMarkerPath(account: AccountIdentity | null): string {
-  const markerFile = account ? `${cacheAccountKey(account)}.${REFRESH_MARKER_FILE}` : REFRESH_MARKER_FILE;
+  const markerFile = account
+    ? `${cacheAccountKey(account)}.${REFRESH_MARKER_FILE}`
+    : REFRESH_MARKER_FILE;
   return join(dirname(usageCachePath(account)), markerFile);
 }
 
@@ -477,7 +517,12 @@ function defaultCacheDir(): string {
 
   if (platform() === "win32") {
     const localAppData = process.env["LOCALAPPDATA"];
-    return join(localAppData && localAppData.trim() !== "" ? localAppData : join(homedir(), "AppData", "Local"), "copilotline");
+    return join(
+      localAppData && localAppData.trim() !== ""
+        ? localAppData
+        : join(homedir(), "AppData", "Local"),
+      "copilotline",
+    );
   }
 
   return join(homedir(), ".cache", "copilotline");
@@ -520,10 +565,6 @@ function readNumber(value: unknown): number | null {
 
 function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
-}
-
-function clampPercent(value: number | null): number | null {
-  return value === null ? null : Math.max(0, Math.min(100, value));
 }
 
 function cleanToken(token: string | undefined): string | null {

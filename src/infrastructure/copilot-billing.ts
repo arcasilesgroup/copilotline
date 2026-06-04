@@ -174,21 +174,23 @@ export async function refreshCopilotBillingCache(
   return cache;
 }
 
-export function billingForRender(input?: unknown, now: () => number = Date.now): BillingSnapshot | null {
+export function billingForRender(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): BillingSnapshot | null {
   if (!copilotBillingEnabled()) {
     return null;
   }
-
-  const account = selectCopilotAccount(input).selected;
   return readCachedCopilotBilling(account, now)?.cache.billing ?? null;
 }
 
-export function shouldRefreshBillingCache(input?: unknown, now: () => number = Date.now): boolean {
+export function shouldRefreshBillingCache(
+  account: AccountIdentity | null,
+  now: () => number = Date.now,
+): boolean {
   if (!copilotBillingEnabled()) {
     return false;
   }
-
-  const account = selectCopilotAccount(input).selected;
   const cached = readCachedCopilotBilling(account, now);
   return cached === null || cached.ageMs >= CACHE_TTL_MS;
 }

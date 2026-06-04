@@ -20,6 +20,14 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "Copilot | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
+      quotaUnit: null,
     });
 
     expect(report.summary.warn).toBeGreaterThan(0);
@@ -44,6 +52,14 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
+      quotaUnit: null,
     });
 
     expect(report.summary.fail).toBe(0);
@@ -69,10 +85,20 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
+      quotaUnit: null,
     });
 
     expect(report.sections[1]?.lines[1]?.status).toBe("pass");
-    expect(report.sections[1]?.lines[1]?.message).toContain("copilotline render");
+    expect(report.sections[1]?.lines[1]?.message).toContain(
+      "copilotline render",
+    );
   });
 
   test("warns when custom status visibility is disabled", () => {
@@ -93,9 +119,55 @@ describe("runDoctor", () => {
       gitAvailable: true,
       renderPreview: "GPT-5.4 | ctx 42%",
       nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto",
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
+      quotaUnit: null,
     });
 
     expect(report.summary.warn).toBeGreaterThan(0);
     expect(report.sections[1]?.lines[2]?.message).toContain("showCustom");
+  });
+
+  test("reports the billing unit from the cached quota snapshot (spec-002)", () => {
+    const base = {
+      version: "0.1.0",
+      generatedAt: "2026-05-07T15:00:00.000Z",
+      copilotCommandAvailable: true,
+      copilotVersion: "1.0.54",
+      copilotHome: "/tmp/.copilot",
+      settingsPath: "/tmp/.copilot/settings.json",
+      settingsExists: true,
+      settingsParseError: null,
+      statusLineCommand: "copilotline",
+      customStatusVisible: true,
+      statusLineCommandAvailable: true,
+      recommendedCommand: "copilotline",
+      binaryAvailable: true,
+      gitAvailable: true,
+      renderPreview: "GPT-5.4 | ctx 42%",
+      nodeVersion: "25.9.0",
+      selectedAccount: null,
+      systemAccount: null,
+      accountMode: "auto" as const,
+      accountOverride: null,
+      tokenAvailableForSelectedAccount: false,
+      tokenSourceForSelectedAccount: null,
+      tokenErrorForSelectedAccount: null,
+      quotaUnit: null,
+    };
+
+    const billingLine = (unit: "request" | "credit" | "token" | null) =>
+      runDoctor({ ...base, quotaUnit: unit }).sections[2]?.lines[3]?.message ??
+      "";
+
+    expect(billingLine("credit")).toContain("AI credits");
+    expect(billingLine("token")).toContain("tokens");
+    expect(billingLine("request")).toContain("premium requests");
+    expect(billingLine(null)).toContain("no quota snapshot");
   });
 });

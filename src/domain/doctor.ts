@@ -3,7 +3,10 @@ export type DiagnosticStatus = "pass" | "warn" | "fail";
 export interface DiagnosticLine {
   status: DiagnosticStatus;
   message: string;
-  fix?: string;
+  // Optional remediation hint. Explicitly admits `undefined` so report
+  // builders can use the `cond ? undefined : msg` idiom under
+  // exactOptionalPropertyTypes.
+  fix?: string | undefined;
 }
 
 export interface DiagnosticSection {
@@ -24,7 +27,9 @@ export interface DoctorReport {
   summary: DiagnosticSummary;
 }
 
-export function summarizeReport(sections: readonly DiagnosticSection[]): DiagnosticSummary {
+export function summarizeReport(
+  sections: readonly DiagnosticSection[],
+): DiagnosticSummary {
   const summary: DiagnosticSummary = { pass: 0, warn: 0, fail: 0 };
 
   for (const section of sections) {

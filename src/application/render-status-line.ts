@@ -8,6 +8,12 @@ import {
   pickString,
   pickUnknown,
 } from "../infrastructure/value-reader.js";
+import {
+  deriveQuotaUnit,
+  normalizeQuotaUnit,
+  parseQuotaSnapshot,
+} from "../infrastructure/quota-snapshot.js";
+import type { UsageConfig } from "../infrastructure/copilotline-config.js";
 
 const RESET = "\x1b[0m";
 const CONTEXT_GLYPH = "✍️";
@@ -43,6 +49,7 @@ export interface RenderDeps {
   getGitInfo?: (cwd: string) => GitInfo;
   quota?: StatusSnapshot["quota"] | null;
   billing?: StatusSnapshot["billing"] | null;
+  usage?: UsageConfig;
   maxWidth?: number | null;
 }
 
@@ -51,7 +58,9 @@ export function buildStatusSnapshot(
   deps: RenderDeps = {},
 ): StatusSnapshot {
   const now = deps.now ?? Date.now;
-  const getGitInfo = deps.getGitInfo ?? (() => ({ branch: null, dirty: false, worktree: false }));
+  const getGitInfo =
+    deps.getGitInfo ??
+    (() => ({ branch: null, dirty: false, worktree: false }));
 
   const cwd =
     pickString(
@@ -64,7 +73,9 @@ export function buildStatusSnapshot(
       ["workspace", "projectDir"],
     ) ?? null;
 
-  const git = cwd ? getGitInfo(cwd) : { branch: null, dirty: false, worktree: false };
+  const git = cwd
+    ? getGitInfo(cwd)
+    : { branch: null, dirty: false, worktree: false };
   const modelLabel =
     pickString(
       input,
@@ -144,13 +155,15 @@ export function buildStatusSnapshot(
         ) ?? null,
     },
     session: {
-      id: pickString(input, ["session", "id"], ["session_id"], ["sessionId"]) ?? null,
+      id:
+        pickString(input, ["session", "id"], ["session_id"], ["sessionId"]) ??
+        null,
       startedAt,
       elapsedSeconds,
     },
     context: normalizeContext(input),
-    quota: hasQuotaData(inputQuota) ? inputQuota : deps.quota ?? emptyQuota(),
-    billing: hasBillingData(inputBilling) ? inputBilling : deps.billing ?? null,
+    quota: hasQuotaData(inputQuota) ? inputQuota : (deps.quota ?? emptyQuota()),
+    billing: hasBillingData(inputBilling) ? inputBilling : (deps.billing ?? null),
     directory: {
       cwd,
       name: directoryName(cwd),
@@ -164,8 +177,12 @@ export function buildStatusSnapshot(
   };
 }
 
-export function renderStatusLine(input: unknown, deps: RenderDeps = {}): string {
+export function renderStatusLine(
+  input: unknown,
+  deps: RenderDeps = {},
+): string {
   return formatStatusLine(buildStatusSnapshot(input, deps), {
+    ...(deps.usage ? { usage: deps.usage } : {}),
     maxWidth: deps.maxWidth ?? null,
   });
 }
@@ -173,6 +190,7 @@ export function renderStatusLine(input: unknown, deps: RenderDeps = {}): string 
 export function formatStatusLine(
   snapshot: StatusSnapshot,
   options: {
+    usage?: UsageConfig;
     maxWidth?: number | null;
   } = {},
 ): string {
@@ -182,13 +200,16 @@ export function formatStatusLine(
     contextSegment(snapshot.context.usedPercent),
     snapshot.context.usedPercent !== null
       ? null
-      : tokenContextSegment(snapshot.context.usedTokens, snapshot.context.totalTokens),
+      : tokenContextSegment(
+          snapshot.context.usedTokens,
+          snapshot.context.totalTokens,
+        ),
     directorySegment(snapshot),
     snapshot.session.elapsedSeconds !== null
       ? sessionSegment(snapshot.session.elapsedSeconds)
       : null,
   ].filter((segment): segment is string => Boolean(segment));
-  const quota = hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota) : null;
+  const quota = hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota, options.usage) : null;
   const agent = snapshot.model.agent ? agentSegment(snapshot.model.agent) : null;
   const billingVariants = billingSegmentVariants(snapshot.billing);
 
@@ -204,47 +225,56 @@ export function formatStatusLine(
 }
 
 function normalizeContext(input: unknown): StatusSnapshot["context"] {
+  // Copilot CLI sends BOTH `current_context_used_percentage` (the real, UI-parity
+  // value that matches `/context`) AND `used_percentage` (a known-buggy field that
+  // mixes the full model window with last-call tokens — github/copilot-cli #1957).
+  // `pickNumber` returns the FIRST resolving path, so the correct display field
+  // MUST precede the legacy/buggy one; `used_percentage` stays only as a
+  // last-resort fallback for older CLIs that lack the display field.
   const usedPercent =
     clampPercent(
       pickNumber(
         input,
-        ["context_window", "used_percentage"],
-        ["context_window", "usedPercent"],
         ["context_window", "current_context_used_percentage"],
         ["context_window", "currentContextUsedPercentage"],
-        ["contextWindow", "used_percentage"],
-        ["contextWindow", "usedPercent"],
         ["contextWindow", "current_context_used_percentage"],
         ["contextWindow", "currentContextUsedPercentage"],
+        ["context", "current_context_used_percentage"],
+        ["context_window", "used_percentage"],
+        ["context_window", "usedPercent"],
+        ["contextWindow", "used_percentage"],
+        ["contextWindow", "usedPercent"],
         ["context", "used_percentage"],
         ["context", "usedPercent"],
       ),
     ) ?? null;
 
+  // Real "tokens currently in context" is `current_context_tokens`; prefer it
+  // over the generic aliases.
   const usedTokens =
     pickNumber(
       input,
-      ["context_window", "used_tokens"],
-      ["context_window", "usedTokens"],
       ["context_window", "current_context_tokens"],
       ["context_window", "currentContextTokens"],
-      ["contextWindow", "used_tokens"],
-      ["contextWindow", "usedTokens"],
       ["contextWindow", "current_context_tokens"],
       ["contextWindow", "currentContextTokens"],
+      ["context_window", "used_tokens"],
+      ["context_window", "usedTokens"],
+      ["contextWindow", "used_tokens"],
+      ["contextWindow", "usedTokens"],
       ["context", "used_tokens"],
       ["context", "usedTokens"],
     ) ?? null;
 
+  // Window CAPACITY is `displayed_context_limit` (practical limit) or
+  // `context_window_size` (raw model window). `total_tokens` is a CUMULATIVE
+  // session counter that exceeds the window, so it is NOT capacity — it stays
+  // last as a fallback only for payloads that expose nothing else.
   const totalTokens =
     pickNumber(
       input,
-      ["context_window", "total_tokens"],
-      ["context_window", "totalTokens"],
       ["context_window", "displayed_context_limit"],
       ["context_window", "displayedContextLimit"],
-      ["contextWindow", "total_tokens"],
-      ["contextWindow", "totalTokens"],
       ["contextWindow", "displayed_context_limit"],
       ["contextWindow", "displayedContextLimit"],
       ["context_window", "context_window_size"],
@@ -253,6 +283,10 @@ function normalizeContext(input: unknown): StatusSnapshot["context"] {
       ["context_window", "maxTokens"],
       ["contextWindow", "max_tokens"],
       ["contextWindow", "maxTokens"],
+      ["context_window", "total_tokens"],
+      ["context_window", "totalTokens"],
+      ["contextWindow", "total_tokens"],
+      ["contextWindow", "totalTokens"],
       ["context", "total_tokens"],
       ["context", "totalTokens"],
       ["context", "maxTokens"],
@@ -261,10 +295,8 @@ function normalizeContext(input: unknown): StatusSnapshot["context"] {
   return {
     usedPercent:
       usedPercent ??
-      (usedTokens !== null &&
-      totalTokens !== null &&
-      totalTokens > 0
-        ? clampPercent((usedTokens / totalTokens) * 100) ?? null
+      (usedTokens !== null && totalTokens !== null && totalTokens > 0
+        ? (clampPercent((usedTokens / totalTokens) * 100) ?? null)
         : null),
     usedTokens,
     totalTokens,
@@ -323,23 +355,96 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
         ["quotaWindow", "percentRemaining"],
       ),
     ) ?? null;
+  // Read counts through the credit/token aliases too (not only the bare
+  // `entitlement`/`remaining`/`used`), so a flat stdin `quota` object expressed
+  // in token-billing field names is not silently dropped.
+  const rawEntitlement =
+    pickNumber(
+      input,
+      ["quota", "entitlement"],
+      ["quota", "credit_entitlement"],
+      ["quota", "creditEntitlement"],
+      ["quota", "token_entitlement"],
+      ["quota", "tokenEntitlement"],
+      ["quota", "allowance"],
+      ["quota", "credit_allowance"],
+      ["quota_window", "entitlement"],
+    ) ?? null;
+  // A negative allowance is a sentinel, not a denominator (mirrors the snapshot
+  // parser); fall through to the used-only clause instead of rendering "/-1".
   const entitlement =
-    pickNumber(input, ["quota", "entitlement"], ["quota_window", "entitlement"]) ?? null;
+    rawEntitlement !== null && rawEntitlement < 0 ? null : rawEntitlement;
   const remaining =
-    pickNumber(input, ["quota", "remaining"], ["quota_window", "remaining"]) ?? null;
+    pickNumber(
+      input,
+      ["quota", "remaining"],
+      ["quota", "credits_remaining"],
+      ["quota", "creditsRemaining"],
+      ["quota", "tokens_remaining"],
+      ["quota", "tokensRemaining"],
+      ["quota_window", "remaining"],
+    ) ?? null;
   const used =
-    pickNumber(input, ["quota", "used"], ["quota_window", "used"]) ??
-    computeUsedQuota(entitlement, remaining);
+    pickNumber(
+      input,
+      ["quota", "used"],
+      ["quota", "credits_used"],
+      ["quota", "creditsUsed"],
+      ["quota", "tokens_used"],
+      ["quota", "tokensUsed"],
+      ["quota_window", "used"],
+    ) ?? computeUsedQuota(entitlement, remaining);
   const usedPercentFromCounts =
     entitlement !== null && entitlement > 0 && used !== null
-      ? clampPercent((used / entitlement) * 100) ?? null
+      ? (clampPercent((used / entitlement) * 100) ?? null)
       : null;
+  const quotaRecord =
+    asRecord(
+      pickUnknown(input, ["quota"], ["quota_window"], ["quotaWindow"]),
+    ) ?? {};
+  const unit =
+    normalizeQuotaUnit(
+      pickString(
+        input,
+        ["quota", "unit"],
+        ["quota", "type"],
+        ["quota_window", "unit"],
+      ),
+    ) ?? deriveQuotaUnit(quotaRecord);
+  const costUsd =
+    pickNumber(
+      input,
+      ["quota", "cost_usd"],
+      ["quota", "costUsd"],
+      ["quota", "cost"],
+    ) ?? null;
+  const creditAllowanceSource =
+    pickString(
+      input,
+      ["quota", "allowance_source"],
+      ["quota", "allowanceSource"],
+      ["quota", "creditAllowanceSource"],
+    ) ?? null;
 
   return {
-    login: pickString(input, ["quota", "login"], ["quota", "account"], ["quota_window", "login"]) ?? null,
-    host: pickString(input, ["quota", "host"], ["quota", "hostname"], ["quota_window", "host"]) ?? null,
+    login:
+      pickString(
+        input,
+        ["quota", "login"],
+        ["quota", "account"],
+        ["quota_window", "login"],
+      ) ?? null,
+    host:
+      pickString(
+        input,
+        ["quota", "host"],
+        ["quota", "hostname"],
+        ["quota_window", "host"],
+      ) ?? null,
     label,
-    usedPercent: usedPercent ?? invertPercent(remainingPercent) ?? usedPercentFromCounts,
+    unit,
+    usedPercent:
+      usedPercent ?? invertPercent(remainingPercent) ?? usedPercentFromCounts,
     remainingPercent,
     entitlement,
     remaining,
@@ -347,6 +452,8 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd,
+    creditAllowanceSource,
     resetAt:
       pickString(
         input,
@@ -358,8 +465,15 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
         ["quota_window", "resetAt"],
       ) ?? null,
     source: null,
-    accountSource: pickString(input, ["quota", "accountSource"], ["quota", "account_source"]) ?? null,
-    tokenSource: pickString(input, ["quota", "tokenSource"], ["quota", "token_source"]) ?? null,
+    accountSource:
+      pickString(
+        input,
+        ["quota", "accountSource"],
+        ["quota", "account_source"],
+      ) ?? null,
+    tokenSource:
+      pickString(input, ["quota", "tokenSource"], ["quota", "token_source"]) ??
+      null,
   };
 }
 
@@ -413,16 +527,23 @@ function quotaFromSnapshots(input: unknown): StatusSnapshot["quota"] | null {
     ["completions", "completions", "completions"],
   ];
   const resetAt = readString(
-    pickUnknown(input, ["quota_reset_date"], ["quotaResetDate"], ["quota_reset_date_utc"], ["quotaResetDateUtc"]),
+    pickUnknown(
+      input,
+      ["quota_reset_date"],
+      ["quotaResetDate"],
+      ["quota_reset_date_utc"],
+      ["quotaResetDateUtc"],
+    ),
   );
 
   for (const [snakeKey, camelKey, label] of candidates) {
-    const snapshot = asRecord(snapshots[snakeKey]) ?? asRecord(snapshots[camelKey]);
+    const snapshot =
+      asRecord(snapshots[snakeKey]) ?? asRecord(snapshots[camelKey]);
     if (!snapshot) {
       continue;
     }
 
-    const quota = quotaFromSnapshot(snapshot, label, snakeKey, resetAt);
+    const quota = parseQuotaSnapshot(snapshot, label, snakeKey, resetAt);
     if (quota && hasQuotaData(quota)) {
       return withPayloadAccount(quota, input);
     }
@@ -447,8 +568,17 @@ function quotaFromHeaders(input: unknown): StatusSnapshot["quota"] | null {
   }
 
   const candidates: Array<[string[], string]> = [
-    [["x-quota-snapshot-premium_models", "x-quota-snapshot-premiummodels"], "premium_models"],
-    [["x-quota-snapshot-premium_interactions", "x-quota-snapshot-premiuminteractions"], "premium_interactions"],
+    [
+      ["x-quota-snapshot-premium_models", "x-quota-snapshot-premiummodels"],
+      "premium_models",
+    ],
+    [
+      [
+        "x-quota-snapshot-premium_interactions",
+        "x-quota-snapshot-premiuminteractions",
+      ],
+      "premium_interactions",
+    ],
     [["x-quota-snapshot-chat"], "chat"],
     [["x-quota-snapshot-completions"], "completions"],
   ];
@@ -469,7 +599,6 @@ function quotaFromHeaders(input: unknown): StatusSnapshot["quota"] | null {
     if (quota && hasQuotaData(quota)) {
       return withPayloadAccount(quota, input);
     }
-
   }
 
   return null;
@@ -489,103 +618,66 @@ function withPayloadAccount(
 }
 
 function accountLoginFromInput(input: unknown): string | null {
-  return pickString(
-    input,
-    ["account", "login"],
-    ["account", "username"],
-    ["github", "login"],
-    ["github", "user", "login"],
-    ["user", "login"],
-    ["user", "username"],
-    ["authentication", "login"],
-    ["authentication", "user", "login"],
-    ["copilot", "account", "login"],
-    ["copilot", "user", "login"],
-  ) ?? null;
+  return (
+    pickString(
+      input,
+      ["account", "login"],
+      ["account", "username"],
+      ["github", "login"],
+      ["github", "user", "login"],
+      ["user", "login"],
+      ["user", "username"],
+      ["authentication", "login"],
+      ["authentication", "user", "login"],
+      ["copilot", "account", "login"],
+      ["copilot", "user", "login"],
+    ) ?? null
+  );
 }
 
 function accountHostFromInput(input: unknown): string | null {
-  return pickString(
-    input,
-    ["account", "host"],
-    ["account", "hostname"],
-    ["github", "host"],
-    ["github", "hostname"],
-    ["authentication", "host"],
-    ["authentication", "hostname"],
-  ) ?? null;
+  return (
+    pickString(
+      input,
+      ["account", "host"],
+      ["account", "hostname"],
+      ["github", "host"],
+      ["github", "hostname"],
+      ["authentication", "host"],
+      ["authentication", "hostname"],
+    ) ?? null
+  );
 }
 
-function quotaFromSnapshot(
-  snapshot: Record<string, unknown>,
+function quotaFromHeaderValue(
+  value: string,
   label: string,
   source: string,
-  resetAt: string | null,
 ): StatusSnapshot["quota"] | null {
-  const entitlement = readNumberValue(snapshot["entitlement"]);
-  const unlimited = readBoolean(snapshot["unlimited"]) ?? entitlement === -1;
-  const remaining =
-    readNumberValue(snapshot["remaining"]) ??
-    readNumberValue(snapshot["quota_remaining"]) ??
-    readNumberValue(snapshot["quotaRemaining"]);
-  const remainingPercent =
-    clampPercent(
-      readNumberValue(snapshot["percent_remaining"]) ??
-      readNumberValue(snapshot["percentRemaining"]),
-    ) ?? null;
-  const used = computeUsedQuota(entitlement, remaining);
-  const usedPercent = unlimited
-    ? 0
-    : invertPercent(remainingPercent) ??
-      (entitlement !== null && entitlement > 0 && used !== null
-        ? clampPercent((used / entitlement) * 100) ?? null
-        : null);
-
-  return {
-    login: null,
-    host: null,
-    label,
-    usedPercent,
-    remainingPercent,
-    entitlement,
-    remaining,
-    used,
-    unlimited,
-    overageUsed:
-      readNumberValue(snapshot["overage_count"]) ??
-      readNumberValue(snapshot["overageCount"]),
-    overagePermitted:
-      readBoolean(snapshot["overage_permitted"]) ??
-      readBoolean(snapshot["overagePermitted"]),
-    resetAt:
-      readString(snapshot["reset_date"]) ??
-      readString(snapshot["resetDate"]) ??
-      readString(snapshot["quota_reset_date"]) ??
-      resetAt,
-    source,
-    accountSource: null,
-    tokenSource: null,
-  };
-}
-
-function quotaFromHeaderValue(value: string, label: string, source: string): StatusSnapshot["quota"] | null {
   const params = new URLSearchParams(value);
+  const unit = normalizeQuotaUnit(params.get("unit")) ?? "request";
   const entitlement = readNumberValue(params.get("ent"));
-  const remainingPercent = clampPercent(readNumberValue(params.get("rem"))) ?? null;
+  const remainingPercent =
+    clampPercent(readNumberValue(params.get("rem"))) ?? null;
   const overagePermitted = params.get("ovPerm") === "true";
+  // D-002-10: only the legacy request unit treats entitlement === -1 as unlimited.
+  const unlimited = unit === "request" && entitlement === -1;
 
   return {
     login: null,
     host: null,
     label,
-    usedPercent: entitlement === -1 ? 0 : invertPercent(remainingPercent),
+    unit,
+    usedPercent: unlimited ? 0 : invertPercent(remainingPercent),
     remainingPercent,
     entitlement,
     remaining: null,
     used: null,
-    unlimited: entitlement === -1,
+    unlimited,
     overageUsed: readNumberValue(params.get("ov")),
     overagePermitted,
+    costUsd: readNumberValue(params.get("cost")),
+    creditAllowanceSource: readString(params.get("allowance_source")),
     resetAt: readString(params.get("rst")),
     source,
     accountSource: null,
@@ -593,7 +685,10 @@ function quotaFromHeaderValue(value: string, label: string, source: string): Sta
   };
 }
 
-function computeElapsedSeconds(startedAt: string | null, nowMs: number): number | null {
+function computeElapsedSeconds(
+  startedAt: string | null,
+  nowMs: number,
+): number | null {
   if (!startedAt) {
     return null;
   }
@@ -643,7 +738,10 @@ function contextSegment(usedPercent: number | null): string | null {
   return `${CONTEXT_GLYPH}  ${colorForPercentage(percent)}${percent}%${RESET}`;
 }
 
-function tokenContextSegment(usedTokens: number | null, totalTokens: number | null): string | null {
+function tokenContextSegment(
+  usedTokens: number | null,
+  totalTokens: number | null,
+): string | null {
   if (usedTokens === null || totalTokens === null || totalTokens <= 0) {
     return null;
   }
@@ -663,7 +761,9 @@ function directorySegment(snapshot: StatusSnapshot): string | null {
     return name;
   }
 
-  const dirty = snapshot.directory.git.dirty ? `${palette.red}*${palette.green}` : "";
+  const dirty = snapshot.directory.git.dirty
+    ? `${palette.red}*${palette.green}`
+    : "";
   const worktree = snapshot.directory.git.worktree ? "⎇:" : "";
   return `${name} ${palette.green}(${worktree}${sanitizeText(branch)}${dirty})${RESET}`;
 }
@@ -686,25 +786,72 @@ function formatDuration(elapsedSeconds: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h${minutes}m`;
 }
 
-function quotaSegment(quota: StatusSnapshot["quota"]): string {
-  const label = sanitizeText(
-    quota.login
-      ? `${quota.login} ${quota.label ?? "premium"}`
-      : quota.label ?? "premium",
-  );
-  const counts = formatQuotaCounts(quota);
-  const unlimitedState = quota.unlimited
-    ? counts
-      ? `${palette.green}∞${RESET}`
-      : `${palette.green}included${RESET}`
-    : null;
+function quotaNoun(quota: StatusSnapshot["quota"]): string {
+  // D-002-02: the noun derives from the billing unit. Credit/token accounts read
+  // "credits"/"tokens"; the legacy request unit keeps its GitHub-supplied label
+  // (premium/chat/completions), defaulting to "premium".
+  if (quota.unit === "credit") {
+    return "credits";
+  }
+  if (quota.unit === "token") {
+    return "tokens";
+  }
+  return quota.label ?? "premium";
+}
 
-  const percent = quota.usedPercent === null ? null : Math.round(quota.usedPercent);
+function quotaSegment(
+  quota: StatusSnapshot["quota"],
+  usage?: UsageConfig,
+): string {
+  const noun = quotaNoun(quota);
+  const label = sanitizeText(quota.login ? `${quota.login} ${noun}` : noun);
+  const counts = formatQuotaCounts(quota);
+  const unlimitedState =
+    quota.unlimited
+      ? counts
+        ? `${palette.green}∞${RESET}`
+        : `${palette.green}included${RESET}`
+      : null;
+  const cost = quota.costUsd;
+
+  if (quota.unlimited) {
+    const parts = [
+      `${palette.white}${label}${RESET}`,
+      unlimitedState,
+      usage?.showCost && cost !== null ? `${style.dim}≈ ${formatUsd(cost)}${RESET}` : null,
+      formatReset(quota.resetAt),
+      formatOverage(quota.overageUsed, quota.overagePermitted),
+    ].filter((part): part is string => Boolean(part));
+    return `💸 ${parts.join(" ")}`;
+  }
+
+  // D-002-02: `usage.units: usd` shows GitHub-reported cost as the primary value
+  // when available; it never estimates, so without a costUsd it falls through to
+  // the native count display.
+  if (usage?.units === "usd" && cost !== null) {
+    const parts = [
+      `${palette.white}${label}${RESET}`,
+      `${palette.white}${formatUsd(cost)}${RESET}`,
+      formatReset(quota.resetAt),
+      formatOverage(quota.overageUsed, quota.overagePermitted),
+    ].filter((part): part is string => Boolean(part));
+    return `💸 ${parts.join(" ")}`;
+  }
+
+  const percent =
+    quota.usedPercent === null ? null : Math.round(quota.usedPercent);
+  const costClause =
+    usage?.showCost && cost !== null
+      ? `${style.dim}≈ ${formatUsd(cost)}${RESET}`
+      : null;
   const parts = [
     `${palette.white}${label}${RESET}`,
-    unlimitedState ?? (percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH)),
-    quota.unlimited ? null : percent === null ? null : `${colorForPercentage(percent)}${percent}%${RESET}`,
+    percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH),
+    percent === null
+      ? null
+      : `${colorForPercentage(percent)}${percent}%${RESET}`,
     counts ? `${style.dim}${counts}${RESET}` : null,
+    costClause,
     formatReset(quota.resetAt),
     formatOverage(quota.overageUsed, quota.overagePermitted),
   ].filter((part): part is string => Boolean(part));
@@ -743,6 +890,7 @@ function emptyQuota(): StatusSnapshot["quota"] {
     login: null,
     host: null,
     label: null,
+    unit: "request",
     usedPercent: null,
     remainingPercent: null,
     entitlement: null,
@@ -751,6 +899,8 @@ function emptyQuota(): StatusSnapshot["quota"] {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd: null,
+    creditAllowanceSource: null,
     resetAt: null,
     source: null,
     accountSource: null,
@@ -830,10 +980,13 @@ function escapeRegExp(value: string): string {
 }
 
 function invertPercent(percent: number | null): number | null {
-  return percent === null ? null : clampPercent(100 - percent) ?? null;
+  return percent === null ? null : (clampPercent(100 - percent) ?? null);
 }
 
-function findHeaderValue(headers: Record<string, unknown>, names: string[]): string | null {
+function findHeaderValue(
+  headers: Record<string, unknown>,
+  names: string[],
+): string | null {
   const normalized = new Map<string, string>();
   for (const [key, value] of Object.entries(headers)) {
     if (typeof value === "string" && value.trim() !== "") {
@@ -896,11 +1049,10 @@ function readNumberValue(value: unknown): number | null {
   return null;
 }
 
-function readBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-function computeUsedQuota(entitlement: number | null, remaining: number | null): number | null {
+function computeUsedQuota(
+  entitlement: number | null,
+  remaining: number | null,
+): number | null {
   if (entitlement === null || remaining === null) {
     return null;
   }
@@ -909,12 +1061,19 @@ function computeUsedQuota(entitlement: number | null, remaining: number | null):
 }
 
 function formatQuotaCounts(quota: StatusSnapshot["quota"]): string | null {
-  if (quota.entitlement === null || quota.entitlement <= 0) {
+  const used =
+    quota.used ?? computeUsedQuota(quota.entitlement, quota.remaining);
+  if (used === null) {
     return null;
   }
 
-  const used = quota.used ?? computeUsedQuota(quota.entitlement, quota.remaining);
-  if (used === null) {
+  // D-002-12: no reported allowance -> show a used-only clause with no fabricated
+  // denominator (the most likely live shape under token billing).
+  if (quota.entitlement === null) {
+    return `${formatCompactNumber(used)} used`;
+  }
+
+  if (quota.entitlement <= 0) {
     return null;
   }
 
@@ -934,10 +1093,12 @@ function formatCompactNumber(value: number): string {
 }
 
 function formatCompactDecimal(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(1).replace(/\.0$/, "");
 }
 
-function formatReset(resetAt: string | null): string | null {
+export function formatReset(resetAt: string | null): string | null {
   if (!resetAt) {
     return null;
   }
@@ -947,15 +1108,31 @@ function formatReset(resetAt: string | null): string | null {
     return null;
   }
 
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const month = months[date.getMonth()] ?? "";
-  const day = date.getDate();
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${style.dim}⟳${RESET} ${palette.white}${month} ${day} ${hour}:${minute}${RESET}`;
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const month = months[date.getUTCMonth()] ?? "";
+  const day = date.getUTCDate();
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${style.dim}⟳${RESET} ${palette.white}${month} ${day} ${hour}:${minute} UTC${RESET}`;
 }
 
-function formatOverage(overageUsed: number | null, overagePermitted: boolean | null): string | null {
+function formatOverage(
+  overageUsed: number | null,
+  overagePermitted: boolean | null,
+): string | null {
   if (!overagePermitted || overageUsed === null || overageUsed <= 0) {
     return null;
   }

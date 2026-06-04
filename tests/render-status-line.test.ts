@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildStatusSnapshot, renderStatusLine } from "../src/application/render-status-line.js";
+import {
+  buildStatusSnapshot,
+  renderStatusLine,
+} from "../src/application/render-status-line.js";
 
 const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
 const fixedNow = () => new Date("2026-05-07T15:00:00Z").getTime();
@@ -13,6 +16,7 @@ describe("renderStatusLine", () => {
     login: "work-account",
     host: "github.com",
     label: "premium",
+    unit: "request",
     usedPercent: 62,
     remainingPercent: 38,
     entitlement: 1_000,
@@ -21,6 +25,8 @@ describe("renderStatusLine", () => {
     unlimited: false,
     overageUsed: null,
     overagePermitted: null,
+    costUsd: null,
+    creditAllowanceSource: null,
     resetAt: "2026-06-01T00:00:00Z",
     source: "cache",
     accountSource: "copilot-config",
@@ -70,7 +76,10 @@ describe("renderStatusLine", () => {
         workspace: { current_dir: "/tmp/example" },
         context_window: { used_tokens: 250, total_tokens: 1000 },
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     const plain = stripAnsi(line);
@@ -92,13 +101,63 @@ describe("renderStatusLine", () => {
         },
         cost: { total_duration_ms: 3_900_000 },
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     const plain = stripAnsi(line);
     expect(plain).toContain("GPT-5.5");
     expect(plain).toContain("✍️  45%");
     expect(plain).toContain("⏱ 1h5m");
+  });
+
+  test("prefers current_context_used_percentage over the buggy used_percentage (#1957)", () => {
+    // Copilot CLI sends BOTH fields. `used_percentage` is the known-buggy value
+    // (full window + last call); `current_context_used_percentage` matches what
+    // `/context` reports. The correct field must win.
+    const line = renderStatusLine(
+      {
+        model: { display_name: "GPT-5" },
+        cwd: "/tmp/copilotline",
+        context_window: {
+          used_percentage: 85,
+          current_context_used_percentage: 32,
+          current_context_tokens: 64_000,
+          displayed_context_limit: 200_000,
+          total_tokens: 512_345,
+          context_window_size: 200_000,
+        },
+      },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("✍️  32%");
+    expect(plain).not.toContain("85%");
+  });
+
+  test("snapshot capacity uses displayed_context_limit, not cumulative total_tokens", () => {
+    const snapshot = buildStatusSnapshot(
+      {
+        context_window: {
+          current_context_used_percentage: 32,
+          current_context_tokens: 64_000,
+          displayed_context_limit: 200_000,
+          total_tokens: 512_345,
+        },
+      },
+      { now: fixedNow },
+    );
+
+    expect(snapshot.context.usedPercent).toBe(32);
+    expect(snapshot.context.usedTokens).toBe(64_000);
+    // The cumulative 512_345 counter must NOT be treated as window capacity.
+    expect(snapshot.context.totalTokens).toBe(200_000);
   });
 
   test("renders Copilot reasoning effort from nested model fields", () => {
@@ -154,9 +213,10 @@ describe("renderStatusLine", () => {
       {
         ...deps,
         quota: {
-          login: null,
-          host: null,
+          login: "work-account",
+          host: "github.com",
           label: "premium",
+          unit: "request",
           usedPercent: 48,
           remainingPercent: 52,
           entitlement: 300,
@@ -165,9 +225,11 @@ describe("renderStatusLine", () => {
           unlimited: false,
           overageUsed: null,
           overagePermitted: null,
+          costUsd: null,
+          creditAllowanceSource: null,
           resetAt: "2026-06-01",
           source: "cache",
-          accountSource: null,
+          accountSource: "cache",
           tokenSource: null,
         },
       },
@@ -185,7 +247,8 @@ describe("renderStatusLine", () => {
       {
         model: { display_name: "GPT-5.5" },
         headers: {
-          "x-quota-snapshot-premium_models": "ent=1000&rem=12.5&ov=1.5&ovPerm=true&rst=2026-06-01T00%3A00%3A00Z",
+          "x-quota-snapshot-premium_models":
+            "ent=1000&rem=12.5&ov=1.5&ovPerm=true&rst=2026-06-01T00%3A00%3A00Z",
         },
       },
       deps,
@@ -249,7 +312,10 @@ describe("renderStatusLine", () => {
         model: { display_name: "GPT-5.5" },
         cwd: "/tmp/copilotline-worktree",
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: "feature", dirty: true, worktree: true }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: "feature", dirty: true, worktree: true }),
+      },
     );
 
     expect(stripAnsi(line)).toContain("copilotline-worktree (⎇:feature*)");
@@ -265,7 +331,10 @@ describe("renderStatusLine", () => {
         session: { id: "abc", start_time: "2026-05-07T14:30:00Z" },
         cwd: "/tmp/demo",
       },
-      { now: fixedNow, getGitInfo: () => ({ branch: null, dirty: false, worktree: false }) },
+      {
+        now: fixedNow,
+        getGitInfo: () => ({ branch: null, dirty: false, worktree: false }),
+      },
     );
 
     expect(snapshot.session.id).toBe("abc");
@@ -325,7 +394,7 @@ describe("renderStatusLine", () => {
           ...deps,
           quota,
           billing,
-          maxWidth: 120,
+          maxWidth: 110,
         },
       ),
     );
@@ -338,7 +407,7 @@ describe("renderStatusLine", () => {
           ...deps,
           quota,
           billing,
-          maxWidth: 90,
+          maxWidth: 95,
         },
       ),
     );
@@ -351,7 +420,7 @@ describe("renderStatusLine", () => {
           ...deps,
           quota,
           billing,
-          maxWidth: 80,
+          maxWidth: 86,
         },
       ),
     );
@@ -364,7 +433,7 @@ describe("renderStatusLine", () => {
           ...deps,
           quota,
           billing,
-          maxWidth: 76,
+          maxWidth: 82,
         },
       ),
     );
@@ -395,5 +464,115 @@ describe("renderStatusLine", () => {
       monthlySpendUsd: 0.44,
       source: "official",
     });
+  });
+});
+
+describe("renderStatusLine token/credit billing (spec-002)", () => {
+  test("renders a credits noun and allowance bar for a credit-billed account", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).not.toContain("premium");
+    expect(plain).toContain("7%");
+    expect(plain).toContain("105/1.5k");
+  });
+
+  test("renders a used-only clause when no allowance is reported (D-002-12)", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { unit: "credit", used: 420 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("420 used");
+    // no bar, no percent, no fabricated denominator
+    expect(plain).not.toContain("%");
+    expect(plain).not.toContain("/");
+  });
+
+  test("renders a tokens noun with compact magnitudes", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "token", entitlement: 5_000_000, used: 1_200_000 },
+      },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 tokens");
+    expect(plain).toContain("1.2m/5m");
+  });
+
+  test("omits the quota segment entirely when there is no usable datum", () => {
+    const line = renderStatusLine({ cwd: "/x", quota: {} }, deps);
+    expect(stripAnsi(line)).not.toContain("💸");
+  });
+
+  test("reads a flat stdin quota expressed in credit alias keys", () => {
+    const line = renderStatusLine(
+      { cwd: "/x", quota: { credit_entitlement: 1500, credits_used: 105 } },
+      deps,
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("105/1.5k");
+  });
+});
+
+describe("renderStatusLine usage units/cost config (spec-002 P4)", () => {
+  test("usage.units=usd shows GitHub-reported cost as the primary value", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 credits");
+    expect(plain).toContain("$1.05");
+    expect(plain).not.toContain("105/1.5k");
+  });
+
+  test("usage.showCost appends a secondary cost clause alongside the count", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: {
+          unit: "credit",
+          entitlement: 1500,
+          remaining: 1395,
+          cost_usd: 1.05,
+        },
+      },
+      { ...deps, usage: { units: "credit", showCost: true } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).toContain("≈ $1.05");
+  });
+
+  test("usage.units=usd falls back to native counts when no cost is reported", () => {
+    const line = renderStatusLine(
+      {
+        cwd: "/x",
+        quota: { unit: "credit", entitlement: 1500, remaining: 1395 },
+      },
+      { ...deps, usage: { units: "usd", showCost: false } },
+    );
+    const plain = stripAnsi(line);
+    expect(plain).toContain("105/1.5k");
+    expect(plain).not.toContain("$");
   });
 });
