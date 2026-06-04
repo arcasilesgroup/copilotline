@@ -45,13 +45,15 @@ export interface TokenResolutionStatus {
  * runtime's concrete `typeof fetch` (Bun's includes a static `preconnect`),
  * so test doubles only need to satisfy the call signature.
  */
-export type FetchImpl = (
+export type FetchLike = (
   input: string | URL | Request,
   init?: RequestInit,
 ) => Promise<Response>;
 
+export type FetchImpl = FetchLike;
+
 export interface ResolveTokenOptions {
-  fetchImpl?: FetchImpl;
+  fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }

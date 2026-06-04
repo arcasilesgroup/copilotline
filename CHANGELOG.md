@@ -65,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Quota labels include the login when account metadata is available.
 - `install`/`uninstall` now edit `~/.copilot/settings.json` surgically, preserving JSONC comments and trailing commas; previous versions stripped every comment. If the file cannot be edited in place, a `.bak` is written and a warning is printed before a full rewrite.
 - The quota reset time is rendered in UTC (with a `UTC` label) instead of the machine's local timezone, so output is deterministic across hosts.
+- Unlimited premium quota entries now keep reset and overage metadata and avoid misleading `0/0` counters by showing `included` when GitHub does not return a usable entitlement.
+- Official AI credit billing now renders as a separate adjacent text-only monthly segment when GitHub billing usage data is available, and falls back to capability-only states such as `credits on` when it is not.
 
 ### Removed
 

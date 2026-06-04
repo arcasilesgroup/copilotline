@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { writeCachedCopilotBilling } from "../src/infrastructure/copilot-billing.js";
+import { cacheAccountKey } from "../src/infrastructure/copilot-account.js";
 import { cleanupTempDir, createTempDir } from "./helpers.js";
 
 const root = join(import.meta.dirname, "..");
@@ -23,6 +25,7 @@ function run(
     env: {
       ...process.env,
       COPILOTLINE_USAGE: "0",
+      COPILOTLINE_BILLING: "0",
       COPILOTLINE_ACCOUNT: "0",
       ...options.env,
     },
@@ -123,14 +126,14 @@ function runNoLeak(
       COPILOTLINE_USAGE: "1",
       COPILOT_HOME: fixture.home,
       COPILOTLINE_CACHE_DIR: fixture.cacheDir,
-      COPILOTLINE_VSCODE_STATE_DB: join(
-        fixture.emptyPathDir,
-        "does-not-exist.vscdb",
-      ),
-      PATH: fixture.emptyPathDir,
-    },
-    input: options.stdin ?? "",
-    encoding: "utf-8",
+  COPILOTLINE_VSCODE_STATE_DB: join(
+    fixture.emptyPathDir,
+    "does-not-exist.vscdb",
+  ),
+  PATH: fixture.emptyPathDir,
+},
+input: options.stdin ?? "",
+encoding: "utf-8",
   });
 }
 
@@ -201,6 +204,132 @@ describe("cli", () => {
     expect(parsed.data.context.usedPercent).toBe(12);
   });
 
+  test("render --json includes cached billing data", () => {
+    const tempDir = createTempDir();
+    const originalCacheDir = process.env["COPILOTLINE_CACHE_DIR"];
+
+    try {
+      process.env["COPILOTLINE_CACHE_DIR"] = tempDir;
+      writeCachedCopilotBilling({
+        fetchedAt: "2026-05-07T15:00:00.000Z",
+        account: { login: "work-account", host: "github.com", source: "payload" },
+        tokenSource: "explicit token",
+        billing: {
+          login: "work-account",
+          host: "github.com",
+          state: "exact",
+          label: "credits",
+          monthlyCredits: 43.5,
+          monthlySpendUsd: 0.44,
+          period: "month",
+          source: "official",
+          tokenSource: "explicit token",
+        },
+      });
+
+      const result = run(
+        ["render", "--json"],
+        {
+          stdin: JSON.stringify({
+            account: { login: "work-account", host: "github.com" },
+            model: { displayName: "GPT-5.4" },
+          }),
+          env: {
+            COPILOTLINE_ACCOUNT: "1",
+            COPILOTLINE_BILLING: "1",
+            COPILOTLINE_CACHE_DIR: tempDir,
+            COPILOTLINE_CONFIG_DIR: tempDir,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(result.stdout) as {
+        data: {
+          billing: {
+            state: string;
+            monthlyCredits: number | null;
+            monthlySpendUsd: number | null;
+          } | null;
+        };
+      };
+      expect(parsed.data.billing).toMatchObject({
+        state: "exact",
+        monthlyCredits: 43.5,
+        monthlySpendUsd: 0.44,
+      });
+    } finally {
+      if (originalCacheDir === undefined) {
+        delete process.env["COPILOTLINE_CACHE_DIR"];
+      } else {
+        process.env["COPILOTLINE_CACHE_DIR"] = originalCacheDir;
+      }
+      cleanupTempDir(tempDir);
+    }
+  });
+
+  test("render triggers a background refresh when billing is stale", () => {
+    const tempDir = createTempDir();
+
+    try {
+      const result = run(
+        ["render", "--json"],
+        {
+          stdin: JSON.stringify({
+            account: { login: "work-account", host: "github.com" },
+            model: { displayName: "GPT-5.4" },
+          }),
+          env: {
+            COPILOTLINE_ACCOUNT: "1",
+            COPILOTLINE_BILLING: "1",
+            COPILOTLINE_CACHE_DIR: tempDir,
+            COPILOTLINE_CONFIG_DIR: tempDir,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readdirSync(tempDir)).toContain(`${cacheAccountKey({ login: "work-account", host: "github.com", source: "payload" })}.usage-refresh.marker`);
+    } finally {
+      cleanupTempDir(tempDir);
+    }
+  });
+
+  test("refresh --json returns a capability-only billing state when numeric billing is unavailable", () => {
+    const tempDir = createTempDir();
+
+    try {
+      const result = run(["refresh", "--json", "--login", "work-account"], {
+        env: {
+          COPILOTLINE_USAGE: "0",
+          COPILOTLINE_BILLING: "1",
+          COPILOTLINE_ACCOUNT: "1",
+          COPILOTLINE_CACHE_DIR: tempDir,
+          COPILOTLINE_CONFIG_DIR: tempDir,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(result.stdout) as {
+        billing: {
+          billing: {
+            state: string;
+            monthlyCredits: number | null;
+            monthlySpendUsd: number | null;
+            source: string;
+          };
+        } | null;
+      };
+      expect(parsed.billing?.billing).toMatchObject({
+        state: "capability",
+        monthlyCredits: null,
+        monthlySpendUsd: null,
+        source: "unavailable",
+      });
+    } finally {
+      cleanupTempDir(tempDir);
+    }
+  });
   test("install and uninstall mutate COPILOT_HOME settings.json", () => {
     const tempDir = createTempDir();
 

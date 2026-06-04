@@ -51,11 +51,24 @@ export interface QuotaSnapshot {
   tokenSource: string | null;
 }
 
+export interface BillingSnapshot {
+  login: string | null;
+  host: string | null;
+  state: "exact" | "capability";
+  label: string;
+  monthlyCredits: number | null;
+  monthlySpendUsd: number | null;
+  period: "month";
+  source: "official" | "unsupported" | "unauthorized" | "unavailable";
+  tokenSource: string | null;
+}
+
 export interface StatusSnapshot {
   model: ModelSnapshot;
   session: SessionSnapshot;
   context: ContextSnapshot;
   quota: QuotaSnapshot;
+  billing: BillingSnapshot | null;
   directory: DirectorySnapshot;
   rawKeys: string[];
 }

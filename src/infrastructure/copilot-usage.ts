@@ -10,6 +10,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { QuotaSnapshot } from "../domain/status-line.js";
+import { shouldRefreshBillingCache } from "./copilot-billing.js";
 import { asRecord } from "./value-reader.js";
 import { normalizeQuotaUnit, parseQuotaSnapshot } from "./quota-snapshot.js";
 import {
@@ -19,6 +20,7 @@ import {
   selectCopilotAccount,
   usageApiBaseForHost,
   type AccountIdentity,
+  type FetchLike,
   type ResolveTokenOptions,
   type TokenResolution,
 } from "./copilot-account.js";
@@ -45,7 +47,7 @@ export interface UsageCacheWithAge {
 export interface FetchCopilotUsageOptions {
   token: string;
   host?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -152,7 +154,7 @@ export async function refreshCopilotUsageCache(
     host?: string | null;
     input?: unknown;
     account?: AccountIdentity | null;
-    fetchImpl?: typeof fetch;
+    fetchImpl?: FetchLike;
     timeoutMs?: number;
     now?: () => number;
   } = {},
@@ -235,10 +237,9 @@ export function refreshCopilotUsageInBackground(
   account: AccountIdentity | null,
   now: () => number = Date.now,
 ): void {
-  if (
-    !shouldRefreshUsageCache(account, now) ||
-    refreshRecentlyStarted(account, now)
-  ) {
+  const usageStale = shouldRefreshUsageCache(account, now);
+  const billingStale = shouldRefreshBillingCache(account, now);
+  if ((!usageStale && !billingStale) || refreshRecentlyStarted(account, now)) {
     return;
   }
 
@@ -343,7 +344,7 @@ async function tokenForRefresh(
   account: AccountIdentity | null,
   options: {
     token?: string | null;
-    fetchImpl?: typeof fetch;
+    fetchImpl?: FetchLike;
     timeoutMs?: number;
   },
 ): Promise<TokenResolution | null> {

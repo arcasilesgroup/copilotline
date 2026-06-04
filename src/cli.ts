@@ -25,6 +25,15 @@ import {
 } from "./infrastructure/copilot-settings-file.js";
 import { isCommandAvailable } from "./infrastructure/command-tools.js";
 import {
+  billingCachePath,
+  billingForRender,
+  copilotBillingEnabled,
+  readCachedCopilotBilling,
+  refreshCopilotBillingCache,
+  type BillingCache,
+} from "./infrastructure/copilot-billing.js";
+import {
+  copilotUsageEnabled,
   quotaForRender,
   readCachedCopilotUsage,
   refreshCopilotUsageCache,
@@ -197,12 +206,14 @@ async function runRender(args: string[]): Promise<number> {
   // foreground spawns).
   const account = selectCopilotAccount(payload).selected;
   const usage = quotaForRender(account);
+  const billing = billingForRender(account);
   refreshCopilotUsageInBackground(statusLineCommand(), account);
   const usageConfig = readCopilotlineConfig().usage;
   const snapshot = buildStatusSnapshot(payload, {
     now: () => Date.now(),
     getGitInfo,
     quota: usage,
+    billing,
   });
 
   if (asJson) {
@@ -221,7 +232,12 @@ async function runRender(args: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(`${formatStatusLine(snapshot, usageConfig)}\n`);
+  process.stdout.write(
+    `${formatStatusLine(snapshot, {
+    usage: usageConfig,
+    maxWidth: process.stdout.columns ?? null,
+    })}\n`,
+  );
   return 0;
 }
 
@@ -411,45 +427,81 @@ async function runRefreshCommand(args: string[]): Promise<number> {
   const quiet = args.includes("--quiet");
   const login = readFlagValue(args, "--login") ?? null;
   const host = readFlagValue(args, "--host") ?? null;
+  const selectedAccount = login
+    ? { login, host: host ?? "github.com", source: "manual" as const }
+    : selectCopilotAccount().selected;
+  let usage = null;
+  let billing: BillingCache | null = null;
+  let usageError: string | null = null;
+  let billingError: string | null = null;
 
-  try {
-    const cache = await refreshCopilotUsageCache({ login, host });
-    if (asJson) {
-      process.stdout.write(`${JSON.stringify(cache, null, 2)}\n`);
-    } else if (!quiet) {
-      process.stdout.write(
-        `copilotline usage cache refreshed in ${usageCachePath(cache.account)}\n`,
-      );
+  if (copilotUsageEnabled()) {
+    try {
+      usage = await refreshCopilotUsageCache({ login, host });
+    } catch (error) {
+      usageError = error instanceof Error ? error.message : "Failed to refresh Copilot usage";
     }
-    return 0;
-  } catch (error) {
+  }
+
+  if (copilotBillingEnabled()) {
+    try {
+      billing = await refreshCopilotBillingCache({ login, host });
+    } catch (error) {
+      billingError = error instanceof Error ? error.message : "Failed to refresh Copilot billing";
+    }
+  }
+
+  if (usageError === null && billingError === null) {
     if (asJson) {
       process.stdout.write(
         `${JSON.stringify(
           {
-            error:
-              error instanceof Error
-                ? error.message
-                : "Failed to refresh Copilot usage",
-            cached:
-              readCachedCopilotUsage(selectCopilotAccount().selected)?.cache ??
-              null,
+            usage,
+            billing,
           },
           null,
           2,
         )}\n`,
       );
     } else if (!quiet) {
-      process.stderr.write(
-        `copilotline refresh failed: ${
-          error instanceof Error
-            ? error.message
-            : "Failed to refresh Copilot usage"
+      const refreshedPaths = [
+        usage ? usageCachePath(usage.account) : null,
+        billing ? billingCachePath(billing.account) : null,
+      ].filter((value): value is string => value !== null);
+      process.stdout.write(
+        `copilotline cache refreshed${
+          refreshedPaths.length > 0 ? ` in ${refreshedPaths.join(", ")}` : ""
         }\n`,
       );
     }
-    return 1;
+    return 0;
   }
+
+  if (asJson) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          error: usageError ?? billingError ?? "Failed to refresh copilotline cache",
+          usage,
+          billing,
+          cached: {
+            usage: readCachedCopilotUsage(selectedAccount)?.cache ?? null,
+            billing: readCachedCopilotBilling(selectedAccount)?.cache ?? null,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else if (!quiet) {
+    process.stderr.write(
+      `copilotline refresh failed: ${
+        usageError ?? billingError ?? "Failed to refresh copilotline cache"
+      }\n`,
+    );
+  }
+
+  return 1;
 }
 
 interface EnrichedAccount extends AccountIdentity {

@@ -51,8 +51,10 @@ describe("copilot account", () => {
 
   test("payload account wins over gh fallback in auto selection", () => {
     const original = process.env["COPILOTLINE_ACCOUNT"];
+    const originalConfigDir = process.env["COPILOTLINE_CONFIG_DIR"];
     delete process.env["COPILOTLINE_ACCOUNT"];
     const tempDir = createTempDir();
+    process.env["COPILOTLINE_CONFIG_DIR"] = tempDir;
     process.env["COPILOT_HOME"] = tempDir;
     process.env["COPILOTLINE_VSCODE_STATE_DB"] = join(tempDir, "missing.vscdb");
 
@@ -68,6 +70,11 @@ describe("copilot account", () => {
         delete process.env["COPILOTLINE_ACCOUNT"];
       } else {
         process.env["COPILOTLINE_ACCOUNT"] = original;
+      }
+      if (originalConfigDir === undefined) {
+        delete process.env["COPILOTLINE_CONFIG_DIR"];
+      } else {
+        process.env["COPILOTLINE_CONFIG_DIR"] = originalConfigDir;
       }
       delete process.env["COPILOT_HOME"];
       delete process.env["COPILOTLINE_VSCODE_STATE_DB"];
