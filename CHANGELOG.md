@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Quota refresh now verifies tokens against the selected Copilot login and refuses wrong-account tokens instead of falling back silently.
 - Quota labels include the login when account metadata is available.
+- Unlimited premium quota entries now keep reset and overage metadata and avoid misleading `0/0` counters by showing `included` when GitHub does not return a usable entitlement.
+- Official AI credit billing now renders as a separate adjacent text-only monthly segment when GitHub billing usage data is available, and falls back to capability-only states such as `credits on` when it is not.
 
 ## [0.1.0] - 2026-05-27
 

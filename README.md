@@ -150,6 +150,30 @@ aligned with the token-based premium model, and falls back to
 is internal, the quota segment is best-effort and may disappear if GitHub changes
 the response.
 
+When GitHub marks the active premium bucket as unlimited, `copilotline` avoids
+misleading `0/0` counters. If the endpoint does not provide a usable
+entitlement, it shows `included` and still renders any reset or overage
+metadata, for example:
+
+```text
+💸 acct_anon premium included ⟳ Jun 1 00:00 +7 extra
+```
+
+The internal quota endpoint still does not expose billing currency spend, so
+quota data cannot predict invoice cost. When the active account exposes
+GitHub's official AI credit billing usage API, `copilotline` renders a separate
+adjacent text-only billing segment with monthly billed credits and spend, for
+example:
+
+```text
+💸 work-account premium ●●●●○○○○ 62% 620/1k ⟳ Jun 1 00:00 │ credits 43.5 · $0.44 mo
+```
+
+If the official billing API is enabled but does not return numeric totals for
+the active account, `copilotline` falls back to an honest capability-only state
+such as `credits on` instead of showing `0`. Per-session money spend and raw
+token pricing remain out of v1.
+
 ### Multi-account behavior
 
 On machines with multiple GitHub accounts, `copilotline` follows the active

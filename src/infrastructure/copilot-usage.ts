@@ -3,6 +3,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { QuotaSnapshot } from "../domain/status-line.js";
+import { shouldRefreshBillingCache } from "./copilot-billing.js";
 import { asRecord } from "./value-reader.js";
 import {
   cacheAccountKey,
@@ -11,6 +12,7 @@ import {
   selectCopilotAccount,
   usageApiBaseForHost,
   type AccountIdentity,
+  type FetchLike,
   type TokenResolution,
 } from "./copilot-account.js";
 
@@ -36,7 +38,7 @@ export interface UsageCacheWithAge {
 export interface FetchCopilotUsageOptions {
   token: string;
   host?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -128,7 +130,7 @@ export async function refreshCopilotUsageCache(
     host?: string | null;
     input?: unknown;
     account?: AccountIdentity | null;
-    fetchImpl?: typeof fetch;
+    fetchImpl?: FetchLike;
     timeoutMs?: number;
     now?: () => number;
   } = {},
@@ -204,7 +206,9 @@ export function refreshCopilotUsageInBackground(
   now: () => number = Date.now,
 ): void {
   const account = selectCopilotAccount(input).selected;
-  if (!shouldRefreshUsageCache(input, now) || refreshRecentlyStarted(account, now)) {
+  const usageStale = shouldRefreshUsageCache(input, now);
+  const billingStale = shouldRefreshBillingCache(input, now);
+  if ((!usageStale && !billingStale) || refreshRecentlyStarted(account, now)) {
     return;
   }
 
@@ -282,7 +286,7 @@ async function tokenForRefresh(
   account: AccountIdentity | null,
   options: {
     token?: string | null;
-    fetchImpl?: typeof fetch;
+    fetchImpl?: FetchLike;
     timeoutMs?: number;
   },
 ): Promise<TokenResolution | null> {
@@ -299,10 +303,18 @@ async function tokenForRefresh(
     return null;
   }
 
-  return await resolveTokenForAccount(account, {
-    fetchImpl: options.fetchImpl,
-    timeoutMs: options.timeoutMs,
-  });
+  const resolveOptions: {
+    fetchImpl?: FetchLike;
+    timeoutMs?: number;
+  } = {};
+  if (options.fetchImpl) {
+    resolveOptions.fetchImpl = options.fetchImpl;
+  }
+  if (options.timeoutMs !== undefined) {
+    resolveOptions.timeoutMs = options.timeoutMs;
+  }
+
+  return await resolveTokenForAccount(account, resolveOptions);
 }
 
 function withAccountMetadata(

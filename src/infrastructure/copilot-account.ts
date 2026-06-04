@@ -40,10 +40,15 @@ export interface TokenResolutionStatus {
 }
 
 export interface ResolveTokenOptions {
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }
+
+export type FetchLike = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export function selectCopilotAccount(input?: unknown): AccountSelection {
   const config = safeReadCopilotlineConfig();

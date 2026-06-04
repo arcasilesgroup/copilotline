@@ -42,6 +42,8 @@ export interface RenderDeps {
   now?: () => number;
   getGitInfo?: (cwd: string) => GitInfo;
   quota?: StatusSnapshot["quota"] | null;
+  billing?: StatusSnapshot["billing"] | null;
+  maxWidth?: number | null;
 }
 
 export function buildStatusSnapshot(
@@ -124,6 +126,7 @@ export function buildStatusSnapshot(
     );
 
   const inputQuota = normalizeQuota(input);
+  const inputBilling = normalizeBilling(input);
 
   return {
     model: {
@@ -147,6 +150,7 @@ export function buildStatusSnapshot(
     },
     context: normalizeContext(input),
     quota: hasQuotaData(inputQuota) ? inputQuota : deps.quota ?? emptyQuota(),
+    billing: hasBillingData(inputBilling) ? inputBilling : deps.billing ?? null,
     directory: {
       cwd,
       name: directoryName(cwd),
@@ -161,12 +165,19 @@ export function buildStatusSnapshot(
 }
 
 export function renderStatusLine(input: unknown, deps: RenderDeps = {}): string {
-  return formatStatusLine(buildStatusSnapshot(input, deps));
+  return formatStatusLine(buildStatusSnapshot(input, deps), {
+    maxWidth: deps.maxWidth ?? null,
+  });
 }
 
-export function formatStatusLine(snapshot: StatusSnapshot): string {
+export function formatStatusLine(
+  snapshot: StatusSnapshot,
+  options: {
+    maxWidth?: number | null;
+  } = {},
+): string {
   const separator = ` ${style.dim}│${RESET} `;
-  const segments = [
+  const fixedSegments = [
     modelSegment(snapshot.model.label, snapshot.model.effort),
     contextSegment(snapshot.context.usedPercent),
     snapshot.context.usedPercent !== null
@@ -176,11 +187,20 @@ export function formatStatusLine(snapshot: StatusSnapshot): string {
     snapshot.session.elapsedSeconds !== null
       ? sessionSegment(snapshot.session.elapsedSeconds)
       : null,
-    hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota) : null,
-    snapshot.model.agent ? agentSegment(snapshot.model.agent) : null,
   ].filter((segment): segment is string => Boolean(segment));
+  const quota = hasQuotaData(snapshot.quota) ? quotaSegment(snapshot.quota) : null;
+  const agent = snapshot.model.agent ? agentSegment(snapshot.model.agent) : null;
+  const billingVariants = billingSegmentVariants(snapshot.billing);
 
-  return segments.join(separator);
+  for (const billing of billingVariants) {
+    const segments = [...fixedSegments, quota, billing, agent].filter((segment): segment is string => Boolean(segment));
+    const line = segments.join(separator);
+    if (options.maxWidth === null || options.maxWidth === undefined || visibleLength(line) <= options.maxWidth) {
+      return line;
+    }
+  }
+
+  return [...fixedSegments, quota, agent].filter((segment): segment is string => Boolean(segment)).join(separator);
 }
 
 function normalizeContext(input: unknown): StatusSnapshot["context"] {
@@ -340,6 +360,27 @@ function normalizeQuota(input: unknown): StatusSnapshot["quota"] {
     source: null,
     accountSource: pickString(input, ["quota", "accountSource"], ["quota", "account_source"]) ?? null,
     tokenSource: pickString(input, ["quota", "tokenSource"], ["quota", "token_source"]) ?? null,
+  };
+}
+
+function normalizeBilling(input: unknown): StatusSnapshot["billing"] {
+  const billingState = pickString(input, ["billing", "state"], ["billing_state"]);
+  const state = billingState === "capability" ? "capability" : billingState === "exact" ? "exact" : null;
+  if (!state) {
+    return null;
+  }
+
+  return {
+    login: pickString(input, ["billing", "login"], ["billing", "account"], ["billing_login"]) ?? null,
+    host: pickString(input, ["billing", "host"], ["billing_host"]) ?? null,
+    state,
+    label: pickString(input, ["billing", "label"], ["billing_label"]) ?? "credits",
+    monthlyCredits: pickNumber(input, ["billing", "monthlyCredits"], ["billing", "monthly_credits"]) ?? null,
+    monthlySpendUsd:
+      pickNumber(input, ["billing", "monthlySpendUsd"], ["billing", "monthly_spend_usd"]) ?? null,
+    period: "month",
+    source: normalizeBillingSource(pickString(input, ["billing", "source"], ["billing_source"]) ?? null),
+    tokenSource: pickString(input, ["billing", "tokenSource"], ["billing", "token_source"]) ?? null,
   };
 }
 
@@ -651,23 +692,36 @@ function quotaSegment(quota: StatusSnapshot["quota"]): string {
       ? `${quota.login} ${quota.label ?? "premium"}`
       : quota.label ?? "premium",
   );
-
-  if (quota.unlimited) {
-    return `💸 ${palette.white}${label}${RESET} ${palette.green}∞${RESET}`;
-  }
+  const counts = formatQuotaCounts(quota);
+  const unlimitedState = quota.unlimited
+    ? counts
+      ? `${palette.green}∞${RESET}`
+      : `${palette.green}included${RESET}`
+    : null;
 
   const percent = quota.usedPercent === null ? null : Math.round(quota.usedPercent);
-  const counts = formatQuotaCounts(quota);
   const parts = [
     `${palette.white}${label}${RESET}`,
-    percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH),
-    percent === null ? null : `${colorForPercentage(percent)}${percent}%${RESET}`,
+    unlimitedState ?? (percent === null ? null : buildBar(percent, QUOTA_BAR_WIDTH)),
+    quota.unlimited ? null : percent === null ? null : `${colorForPercentage(percent)}${percent}%${RESET}`,
     counts ? `${style.dim}${counts}${RESET}` : null,
     formatReset(quota.resetAt),
     formatOverage(quota.overageUsed, quota.overagePermitted),
   ].filter((part): part is string => Boolean(part));
 
   return `💸 ${parts.join(" ")}`;
+}
+
+function billingSegmentVariants(billing: StatusSnapshot["billing"]): Array<string | null> {
+  if (!hasBillingData(billing)) {
+    return [null];
+  }
+
+  if (billing.state === "capability" || billing.monthlyCredits === null || billing.monthlySpendUsd === null) {
+    return [billingCapabilitySegment(billing), null];
+  }
+
+  return [billingExactSegment(billing), billingCompactSegment(billing), billingCapabilitySegment(billing), null];
 }
 
 function hasQuotaData(quota: StatusSnapshot["quota"]): boolean {
@@ -678,6 +732,10 @@ function hasQuotaData(quota: StatusSnapshot["quota"]): boolean {
     quota.remaining !== null ||
     quota.used !== null
   );
+}
+
+function hasBillingData(billing: StatusSnapshot["billing"]): billing is NonNullable<StatusSnapshot["billing"]> {
+  return billing !== null;
 }
 
 function emptyQuota(): StatusSnapshot["quota"] {
@@ -704,6 +762,18 @@ function agentSegment(agent: string): string {
   return `${style.dim}agent ${sanitizeText(agent)}${RESET}`;
 }
 
+function billingExactSegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
+  return `${palette.white}${sanitizeText(billing.label)}${RESET} ${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET} ${style.dim}·${RESET} ${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+}
+
+function billingCompactSegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
+  return `${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET} ${style.dim}·${RESET} ${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+}
+
+function billingCapabilitySegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
+  return `${style.dim}${sanitizeText(billing.label)} on${RESET}`;
+}
+
 function paint(text: string, ansi: string): string {
   return `${ansi}${text}${RESET}`;
 }
@@ -726,6 +796,20 @@ function colorForPercentage(percent: number): string {
 
 function sanitizeText(text: string): string {
   return text.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+}
+
+function normalizeBillingSource(
+  value: string | null,
+): NonNullable<StatusSnapshot["billing"]>["source"] {
+  switch (value) {
+    case "official":
+    case "unsupported":
+    case "unauthorized":
+    case "unavailable":
+      return value;
+    default:
+      return "unavailable";
+  }
 }
 
 function inferEffortFromModelLabel(label: string | null): string | null {
@@ -767,6 +851,34 @@ function findHeaderValue(headers: Record<string, unknown>, names: string[]): str
   return null;
 }
 
+function formatBillingCredits(value: number | null): string {
+  if (value === null) {
+    return "on";
+  }
+
+  return Intl.NumberFormat("en-US", {
+    minimumFractionDigits: value % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatUsd(value: number | null): string {
+  if (value === null) {
+    return "$0.00";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function visibleLength(value: string): number {
+  return Array.from(value.replace(/\x1b\[[0-9;]*m/g, "")).length;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
@@ -797,7 +909,7 @@ function computeUsedQuota(entitlement: number | null, remaining: number | null):
 }
 
 function formatQuotaCounts(quota: StatusSnapshot["quota"]): string | null {
-  if (quota.entitlement === null) {
+  if (quota.entitlement === null || quota.entitlement <= 0) {
     return null;
   }
 

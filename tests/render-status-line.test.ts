@@ -9,6 +9,35 @@ const deps = {
 };
 
 describe("renderStatusLine", () => {
+  const quota = {
+    login: "work-account",
+    host: "github.com",
+    label: "premium",
+    usedPercent: 62,
+    remainingPercent: 38,
+    entitlement: 1_000,
+    remaining: 380,
+    used: 620,
+    unlimited: false,
+    overageUsed: null,
+    overagePermitted: null,
+    resetAt: "2026-06-01T00:00:00Z",
+    source: "cache",
+    accountSource: "copilot-config",
+    tokenSource: null,
+  } as const;
+  const billing = {
+    login: "work-account",
+    host: "github.com",
+    state: "exact",
+    label: "credits",
+    monthlyCredits: 43.5,
+    monthlySpendUsd: 0.44,
+    period: "month",
+    source: "official",
+    tokenSource: null,
+  } as const;
+
   test("renders the main segments from a likely Copilot payload shape", () => {
     const line = renderStatusLine(
       {
@@ -125,6 +154,8 @@ describe("renderStatusLine", () => {
       {
         ...deps,
         quota: {
+          login: null,
+          host: null,
           label: "premium",
           usedPercent: 48,
           remainingPercent: 52,
@@ -136,6 +167,8 @@ describe("renderStatusLine", () => {
           overagePermitted: null,
           resetAt: "2026-06-01",
           source: "cache",
+          accountSource: null,
+          tokenSource: null,
         },
       },
     );
@@ -163,6 +196,34 @@ describe("renderStatusLine", () => {
     expect(plain).toContain("88%");
     expect(plain).toContain("⟳ Jun 1");
     expect(plain).toContain("+1.5 extra");
+  });
+
+  test("renders included state for unlimited premium quota without usable counts", () => {
+    const line = renderStatusLine(
+      {
+        account: { login: "acct_anon", host: "github.com" },
+        quota_reset_date: "2026-06-01T00:00:00Z",
+        quota_snapshots: {
+          premium_interactions: {
+            unlimited: true,
+            entitlement: 0,
+            remaining: 0,
+            overage_count: 7,
+            overage_permitted: true,
+          },
+        },
+      },
+      deps,
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 acct_anon premium");
+    expect(plain).toContain("included");
+    expect(plain).toContain("⟳ Jun 1");
+    expect(plain).toContain("+7 extra");
+    expect(plain).not.toContain("∞");
+    expect(plain).not.toContain("0/0");
+    expect(plain).not.toContain("0%");
   });
 
   test("colors the quota bar by used percentage", () => {
@@ -210,5 +271,129 @@ describe("renderStatusLine", () => {
     expect(snapshot.session.id).toBe("abc");
     expect(snapshot.session.elapsedSeconds).toBe(1800);
     expect(snapshot.rawKeys).toEqual(["cwd", "session"]);
+  });
+
+  test("renders billing as a separate text-only segment beside premium quota", () => {
+    const line = renderStatusLine(
+      {
+        model: { display_name: "GPT-5.5" },
+      },
+      {
+        ...deps,
+        quota,
+        billing,
+      },
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("💸 work-account premium");
+    expect(plain).toContain("credits 43.5 · $0.44 mo");
+    expect(plain.indexOf("💸 work-account premium")).toBeLessThan(plain.indexOf("credits 43.5 · $0.44 mo"));
+  });
+
+  test("renders an honest capability-only billing fallback", () => {
+    const line = renderStatusLine(
+      {
+        model: { display_name: "GPT-5.5" },
+      },
+      {
+        ...deps,
+        quota,
+        billing: {
+          ...billing,
+          state: "capability",
+          monthlyCredits: null,
+          monthlySpendUsd: null,
+          source: "unsupported",
+        },
+      },
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("credits on");
+    expect(plain).not.toContain("$0.00");
+    expect(plain).not.toContain("credits 0");
+  });
+
+  test("degrades billing before quota under horizontal pressure", () => {
+    const full = stripAnsi(
+      renderStatusLine(
+        {
+          model: { display_name: "GPT-5.5" },
+        },
+        {
+          ...deps,
+          quota,
+          billing,
+          maxWidth: 120,
+        },
+      ),
+    );
+    const compact = stripAnsi(
+      renderStatusLine(
+        {
+          model: { display_name: "GPT-5.5" },
+        },
+        {
+          ...deps,
+          quota,
+          billing,
+          maxWidth: 90,
+        },
+      ),
+    );
+    const capability = stripAnsi(
+      renderStatusLine(
+        {
+          model: { display_name: "GPT-5.5" },
+        },
+        {
+          ...deps,
+          quota,
+          billing,
+          maxWidth: 80,
+        },
+      ),
+    );
+    const omitted = stripAnsi(
+      renderStatusLine(
+        {
+          model: { display_name: "GPT-5.5" },
+        },
+        {
+          ...deps,
+          quota,
+          billing,
+          maxWidth: 76,
+        },
+      ),
+    );
+
+    expect(full).toContain("credits 43.5 · $0.44 mo");
+    expect(compact).toContain("43.5 · $0.44 mo");
+    expect(compact).not.toContain("credits 43.5 · $0.44 mo");
+    expect(capability).toContain("credits on");
+    expect(capability).toContain("💸 work-account premium");
+    expect(omitted).not.toContain("credits");
+    expect(omitted).toContain("💸 work-account premium");
+  });
+
+  test("includes billing in the normalized status snapshot", () => {
+    const snapshot = buildStatusSnapshot(
+      {
+        model: { display_name: "GPT-5.5" },
+      },
+      {
+        ...deps,
+        billing,
+      },
+    );
+
+    expect(snapshot.billing).toMatchObject({
+      state: "exact",
+      monthlyCredits: 43.5,
+      monthlySpendUsd: 0.44,
+      source: "official",
+    });
   });
 });
