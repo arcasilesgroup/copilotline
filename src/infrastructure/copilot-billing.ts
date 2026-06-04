@@ -12,16 +12,29 @@ import {
   type TokenResolution,
   usageApiBaseForHost,
 } from "./copilot-account.js";
+import {
+  readCopilotlineConfig,
+  type BillingOwnerType,
+} from "./copilotline-config.js";
 
-const API_VERSION = "2022-11-28";
+const API_VERSION = "2026-03-10";
 const CACHE_FILE = "billing-cache.json";
 const CACHE_TTL_MS = 15 * 60_000;
+
+type BillingEndpointKind = "ai_credit" | "premium_request";
+
+interface BillingOwner {
+  login: string;
+  host: string;
+  type: BillingOwnerType;
+}
 
 export interface BillingCache {
   fetchedAt: string;
   account: AccountIdentity | null;
   tokenSource: string | null;
   billing: BillingSnapshot;
+  owner?: BillingOwner | null;
 }
 
 export interface BillingCacheWithAge {
@@ -32,6 +45,7 @@ export interface BillingCacheWithAge {
 export interface FetchCopilotBillingOptions {
   token: string;
   account: AccountIdentity;
+  owner?: BillingOwner | null;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
 }
@@ -42,9 +56,10 @@ export function copilotBillingEnabled(): boolean {
 }
 
 export function billingCachePath(account?: AccountIdentity | null): string {
-  const explicit = process.env["COPILOTLINE_CACHE_DIR"];
-  const cacheRoot = explicit && explicit.trim() !== "" ? explicit : defaultCacheDir();
-  return join(cacheRoot, account ? `${cacheAccountKey(account)}.${CACHE_FILE}` : CACHE_FILE);
+  return billingCachePathFor(
+    account ?? null,
+    resolveBillingOwner(account ?? null),
+  );
 }
 
 export function readCachedCopilotBilling(
@@ -72,7 +87,10 @@ export function readCachedCopilotBilling(
 }
 
 export function writeCachedCopilotBilling(cache: BillingCache): void {
-  const path = billingCachePath(cache.account);
+  const path = billingCachePathFor(
+    cache.account,
+    cache.owner ?? resolveBillingOwner(cache.account),
+  );
   ensurePrivateDirectory(dirname(path));
   writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, {
     encoding: "utf-8",
@@ -85,15 +103,17 @@ export async function fetchCopilotBilling(options: FetchCopilotBillingOptions): 
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
-  const baseUrl = usageApiBaseForHost(options.account.host);
-  const routes = [
-    `${baseUrl}/users/${encodeURIComponent(options.account.login)}/settings/billing/usage`,
-    `${baseUrl}/orgs/${encodeURIComponent(options.account.login)}/settings/billing/usage`,
-  ];
+  const owner = options.owner ?? resolveBillingOwner(options.account);
+  if (!owner) {
+    return capabilityBilling(options.account, "unavailable");
+  }
+  const baseUrl = usageApiBaseForHost(owner.host);
+  const routes = billingRoutes(owner, baseUrl);
+  const exactResults: ParsedBillingUsage[] = [];
 
   try {
-    for (const [index, route] of routes.entries()) {
-      const response = await fetchImpl(route, {
+    for (const route of routes) {
+      const response = await fetchImpl(route.url, {
         method: "GET",
         headers: {
           Accept: "application/vnd.github+json",
@@ -105,8 +125,14 @@ export async function fetchCopilotBilling(options: FetchCopilotBillingOptions): 
       });
 
       if (response.ok) {
-        const parsed = parseCopilotBillingResponse(await response.json(), options.account);
-        return parsed ?? capabilityBilling(options.account, "unavailable");
+        const parsed = parseCopilotBillingResponse(
+          await response.json(),
+          route.kind,
+        );
+        if (parsed) {
+          exactResults.push(parsed);
+        }
+        continue;
       }
 
       if (response.status === 401 || response.status === 403) {
@@ -114,9 +140,6 @@ export async function fetchCopilotBilling(options: FetchCopilotBillingOptions): 
       }
 
       if (response.status === 404 || response.status === 422) {
-        if (index === routes.length - 1) {
-          return capabilityBilling(options.account, "unsupported");
-        }
         continue;
       }
 
@@ -128,7 +151,10 @@ export async function fetchCopilotBilling(options: FetchCopilotBillingOptions): 
     clearTimeout(timeout);
   }
 
-  return capabilityBilling(options.account, "unsupported");
+  return (
+    combineExactBilling(options.account, exactResults) ??
+    capabilityBilling(options.account, "unsupported")
+  );
 }
 
 export async function refreshCopilotBillingCache(
@@ -138,6 +164,7 @@ export async function refreshCopilotBillingCache(
     host?: string | null;
     input?: unknown;
     account?: AccountIdentity | null;
+    owner?: BillingOwner | null;
     fetchImpl?: FetchLike;
     timeoutMs?: number;
     now?: () => number;
@@ -148,18 +175,20 @@ export async function refreshCopilotBillingCache(
     (options.login
       ? { login: options.login, host: options.host ?? "github.com", source: "manual" as const }
       : selectCopilotAccount(options.input).selected);
+  const billingOwner = options.owner ?? resolveBillingOwner(selectedAccount);
 
   const tokenResolution = await tokenForRefresh(selectedAccount, options);
   const billing = selectedAccount
     ? tokenResolution
-      ? withTokenSource(
-          await fetchCopilotBilling({
-            account: selectedAccount,
-            token: tokenResolution.token,
-            ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-            ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-          }),
-          tokenResolution.source,
+    ? withTokenSource(
+        await fetchCopilotBilling({
+          account: selectedAccount,
+          owner: billingOwner,
+          token: tokenResolution.token,
+          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+          ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        }),
+        tokenResolution.source,
         )
       : withTokenSource(capabilityBilling(selectedAccount, "unavailable"), null)
     : withTokenSource(capabilityBilling(null, "unavailable"), null);
@@ -169,6 +198,7 @@ export async function refreshCopilotBillingCache(
     account: selectedAccount,
     tokenSource: tokenResolution?.source ?? null,
     billing,
+    owner: billingOwner,
   };
   writeCachedCopilotBilling(cache);
   return cache;
@@ -197,41 +227,55 @@ export function shouldRefreshBillingCache(
 
 export function parseCopilotBillingResponse(
   data: unknown,
-  account: AccountIdentity,
-): BillingSnapshot | null {
+  kind: BillingEndpointKind,
+): ParsedBillingUsage | null {
   const record = asRecord(data);
   if (!record) {
     return null;
   }
 
-  const directTotals =
-    extractExactTotals(record) ??
-    extractExactTotals(asRecord(record["month"])) ??
-    extractExactTotals(asRecord(asRecord(record["totals"])?.["month"])) ??
-    extractExactTotals(asRecord(asRecord(record["usage"])?.["month"]));
+  const directTotals = aggregateExactTotals([
+    extractExactTotals(record),
+    extractExactTotals(asRecord(record["month"])),
+    extractExactTotals(asRecord(asRecord(record["totals"])?.["month"])),
+    extractExactTotals(asRecord(asRecord(record["usage"])?.["month"])),
+  ]);
   if (directTotals) {
-    return exactBilling(account, directTotals.monthlyCredits, directTotals.monthlySpendUsd);
+    return {
+      label: kind === "ai_credit" ? "credits" : "premium",
+      ...directTotals,
+    };
   }
 
   const items = itemCollections(record).flatMap((value) => value);
+  if (hasUsageCollection(record) && items.length === 0) {
+    return {
+      label: kind === "ai_credit" ? "credits" : "premium",
+      monthlyCredits: 0,
+      monthlySpendUsd: 0,
+    };
+  }
   const exactItems = items
-    .filter((item) => isAiBillingItem(item) || items.length === 1)
     .map(extractExactTotals)
     .filter((item): item is ExactTotals => item !== null);
-  if (exactItems.length === 0) {
+  const totals = aggregateExactTotals(exactItems);
+  if (!totals) {
     return null;
   }
 
-  return exactBilling(
-    account,
-    exactItems.reduce((sum, item) => sum + item.monthlyCredits, 0),
-    exactItems.reduce((sum, item) => sum + item.monthlySpendUsd, 0),
-  );
+  return {
+    label: kind === "ai_credit" ? "credits" : "premium",
+    ...totals,
+  };
 }
 
 interface ExactTotals {
-  monthlyCredits: number;
-  monthlySpendUsd: number;
+  monthlyCredits: number | null;
+  monthlySpendUsd: number | null;
+}
+
+interface ParsedBillingUsage extends ExactTotals {
+  label: string;
 }
 
 async function tokenForRefresh(
@@ -269,12 +313,17 @@ async function tokenForRefresh(
   return await resolveTokenForAccount(account, resolveOptions);
 }
 
-function exactBilling(account: AccountIdentity, monthlyCredits: number, monthlySpendUsd: number): BillingSnapshot {
+function exactBilling(
+  account: AccountIdentity,
+  label: string,
+  monthlyCredits: number | null,
+  monthlySpendUsd: number | null,
+): BillingSnapshot {
   return {
     login: account.login,
     host: account.host,
     state: "exact",
-    label: "credits",
+    label,
     monthlyCredits,
     monthlySpendUsd,
     period: "month",
@@ -317,6 +366,10 @@ function extractExactTotals(record: Record<string, unknown> | undefined): ExactT
     readNumber(record["monthly_credits"]) ??
     readNumber(record["credits"]) ??
     readNumber(record["credits_used"]) ??
+    readNumber(record["netQuantity"]) ??
+    readNumber(record["net_quantity"]) ??
+    readNumber(record["grossQuantity"]) ??
+    readNumber(record["gross_quantity"]) ??
     readNumber(record["quantity"]) ??
     readNumber(record["usage_quantity"]);
   const monthlySpendUsd =
@@ -324,17 +377,17 @@ function extractExactTotals(record: Record<string, unknown> | undefined): ExactT
     readMoneyUsd(record["monthly_spend_usd"]) ??
     readMoneyUsd(record["spendUsd"]) ??
     readMoneyUsd(record["spend_usd"]) ??
+    readMoneyUsd(record["netAmount"]) ??
+    readMoneyUsd(record["net_amount"]) ??
     readMoneyUsd(record["amountUsd"]) ??
     readMoneyUsd(record["amount_usd"]) ??
     readMoneyUsd(record["grossAmount"]) ??
     readMoneyUsd(record["gross_amount"]) ??
-    readMoneyUsd(record["netAmount"]) ??
-    readMoneyUsd(record["net_amount"]) ??
     readMoneyUsd(record["amount"]) ??
     readMoneyUsd(record["spend"]) ??
     readMoneyUsd(record["cost"]);
 
-  if (monthlyCredits === null || monthlySpendUsd === null) {
+  if (monthlyCredits === null && monthlySpendUsd === null) {
     return null;
   }
 
@@ -363,20 +416,15 @@ function itemCollections(record: Record<string, unknown>): Array<Record<string, 
   );
 }
 
-function isAiBillingItem(record: Record<string, unknown>): boolean {
-  const markers = [
-    readString(record["product"]),
-    readString(record["sku"]),
-    readString(record["name"]),
-    readString(record["meter"]),
-    readString(record["unitType"]),
-    readString(record["unit_type"]),
-  ]
-    .filter((value): value is string => value !== null)
-    .join(" ")
-    .toLowerCase();
-
-  return markers.includes("copilot") || markers.includes("ai") || markers.includes("credit");
+function hasUsageCollection(record: Record<string, unknown>): boolean {
+  return [
+    record["usageItems"],
+    record["usage_items"],
+    record["items"],
+    record["line_items"],
+    record["products"],
+    asRecord(record["usage"])?.["items"],
+  ].some((candidate) => Array.isArray(candidate));
 }
 
 function parseBillingCache(value: unknown): BillingCache | null {
@@ -397,6 +445,7 @@ function parseBillingCache(value: unknown): BillingCache | null {
   const accountRecord = asRecord(record?.["account"]);
   const login = readString(accountRecord?.["login"]) ?? readString(billingRecord["login"]);
   const host = readString(accountRecord?.["host"]) ?? readString(billingRecord["host"]);
+  const ownerRecord = asRecord(record?.["owner"]);
   const account = login
     ? {
         login,
@@ -409,6 +458,7 @@ function parseBillingCache(value: unknown): BillingCache | null {
     fetchedAt,
     account,
     tokenSource: readString(record?.["tokenSource"]) ?? readString(billingRecord["tokenSource"]),
+    owner: parseBillingOwner(ownerRecord),
     billing: {
       login,
       host,
@@ -433,6 +483,141 @@ function readBillingSource(value: unknown): BillingSnapshot["source"] | null {
     default:
       return null;
   }
+}
+
+function billingRoutes(
+  owner: BillingOwner,
+  baseUrl: string,
+): Array<{ kind: BillingEndpointKind; url: string }> {
+  const ownerPath =
+    owner.type === "organization" ? "organizations" : "users";
+  const prefix = `${baseUrl}/${ownerPath}/${encodeURIComponent(owner.login)}/settings/billing`;
+  return [
+    {
+      kind: "ai_credit",
+      url: `${prefix}/ai_credit/usage`,
+    },
+    {
+      kind: "premium_request",
+      url: `${prefix}/premium_request/usage`,
+    },
+  ];
+}
+
+function resolveBillingOwner(account: AccountIdentity | null): BillingOwner | null {
+  const config = readCopilotlineConfig().billing;
+  if (config.owner) {
+    return {
+      login: config.owner,
+      host: account?.host ?? "github.com",
+      type: config.ownerType,
+    };
+  }
+  if (!account) {
+    return null;
+  }
+  return {
+    login: account.login,
+    host: account.host,
+    type: "user",
+  };
+}
+
+function billingCachePathFor(
+  account: AccountIdentity | null,
+  owner: BillingOwner | null,
+): string {
+  const explicit = process.env["COPILOTLINE_CACHE_DIR"];
+  const cacheRoot = explicit && explicit.trim() !== "" ? explicit : defaultCacheDir();
+  const cacheKey = billingCacheKey(account, owner);
+  return join(cacheRoot, cacheKey ? `${cacheKey}.${CACHE_FILE}` : CACHE_FILE);
+}
+
+function billingCacheKey(
+  account: AccountIdentity | null,
+  owner: BillingOwner | null,
+): string | null {
+  if (owner) {
+    return `${owner.type}-${cacheAccountKey({
+      login: owner.login,
+      host: owner.host,
+      source: "manual",
+    })}`;
+  }
+  return account ? cacheAccountKey(account) : null;
+}
+
+function combineExactBilling(
+  account: AccountIdentity,
+  usages: ParsedBillingUsage[],
+): BillingSnapshot | null {
+  const present = usages.filter(
+    (usage) =>
+      usage.monthlyCredits !== null || usage.monthlySpendUsd !== null,
+  );
+  if (present.length === 0) {
+    return null;
+  }
+
+  const quantified = present.filter(
+    (usage) => usage.monthlyCredits !== null,
+  );
+  const [onlyQuantified] = quantified;
+  const [onlyPresent] = present;
+  const label =
+    quantified.length === 1 && onlyQuantified
+      ? onlyQuantified.label
+      : quantified.length === 0 && present.length === 1 && onlyPresent
+        ? onlyPresent.label
+        : "spend";
+
+  return exactBilling(
+    account,
+    label,
+    quantified.length === 1 && onlyQuantified
+      ? onlyQuantified.monthlyCredits
+      : null,
+    sumNullable(present.map((usage) => usage.monthlySpendUsd)),
+  );
+}
+
+function aggregateExactTotals(items: Array<ExactTotals | null>): ExactTotals | null {
+  const present = items.filter((item): item is ExactTotals => item !== null);
+  if (present.length === 0) {
+    return null;
+  }
+
+  return {
+    monthlyCredits: sumNullable(present.map((item) => item.monthlyCredits)),
+    monthlySpendUsd: sumNullable(
+      present.map((item) => item.monthlySpendUsd),
+    ),
+  };
+}
+
+function sumNullable(values: Array<number | null>): number | null {
+  const present = values.filter((value): value is number => value !== null);
+  return present.length === 0
+    ? null
+    : present.reduce((sum, value) => sum + value, 0);
+}
+
+function parseBillingOwner(
+  record: Record<string, unknown> | null | undefined,
+): BillingOwner | null {
+  if (!record) {
+    return null;
+  }
+
+  const login = readString(record["login"]);
+  const host = readString(record["host"]) ?? "github.com";
+  const type =
+    record["type"] === "organization" ? "organization" : record["type"] === "user" ? "user" : null;
+  if (!login || !type) {
+    return null;
+  }
+
+  return { login, host, type };
 }
 
 function readMoneyUsd(value: unknown): number | null {

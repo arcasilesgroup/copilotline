@@ -384,6 +384,28 @@ describe("renderStatusLine", () => {
     expect(plain).not.toContain("credits 0");
   });
 
+  test("renders spend-only billing when GitHub returns dollars without a single usable quantity", () => {
+    const line = renderStatusLine(
+      {
+        model: { display_name: "GPT-5.5" },
+      },
+      {
+        ...deps,
+        quota,
+        billing: {
+          ...billing,
+          label: "spend",
+          monthlyCredits: null,
+          monthlySpendUsd: 1.64,
+        },
+      },
+    );
+
+    const plain = stripAnsi(line);
+    expect(plain).toContain("spend $1.64 mo");
+    expect(plain).not.toContain("credits on");
+  });
+
   test("degrades billing before quota under horizontal pressure", () => {
     const full = stripAnsi(
       renderStatusLine(
