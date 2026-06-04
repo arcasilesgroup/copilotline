@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Official billing refresh can now target a configured billing owner instead of always assuming the active Copilot login. `billing.owner` / `billing.ownerType` config (plus `COPILOTLINE_BILLING_OWNER` / `COPILOTLINE_BILLING_OWNER_TYPE`) let organization-billed seats query the current `/settings/billing/ai_credit/usage` and `/premium_request/usage` routes, and the billing cache is keyed by billing owner so personal and org lookups never collide.
+
+### Fixed
+
+- When GitHub returns monthly spend without a single coherent usage quantity, `copilotline` now renders an honest spend-only billing segment such as `spend $1.64 mo` instead of degrading all the way to the capability-only `credits on` fallback. Empty successful billing reports are also treated as exact zero spend rather than "unsupported".
+
 ## [0.3.1] - 2026-06-02
 
 ### Fixed
