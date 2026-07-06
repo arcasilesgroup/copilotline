@@ -23,19 +23,17 @@ describe("copilot billing", () => {
       token: "test-token",
       fetchImpl: async (url) => {
         seenUrls.push(String(url));
+        if (String(url).endsWith("/premium_request/usage")) {
+          return new Response("{}", { status: 404 });
+        }
         return new Response(
           JSON.stringify({
             usageItems: [
               {
                 product: "copilot_ai",
                 sku: "copilot_ai_credit",
-                quantity: 43.5,
-                grossAmount: { amount: 0.44, currency: "USD" },
-              },
-              {
-                product: "actions",
-                quantity: 999,
-                grossAmount: { amount: 10, currency: "USD" },
+                netQuantity: 43.5,
+                netAmount: { amount: 0.44, currency: "USD" },
               },
             ],
           }),
@@ -44,7 +42,10 @@ describe("copilot billing", () => {
       },
     });
 
-    expect(seenUrls).toEqual(["https://api.github.com/users/work-account/settings/billing/usage"]);
+    expect(seenUrls).toEqual([
+      "https://api.github.com/users/work-account/settings/billing/ai_credit/usage",
+      "https://api.github.com/users/work-account/settings/billing/premium_request/usage",
+    ]);
     expect(billing).toMatchObject({
       login: "work-account",
       host: "github.com",
@@ -76,16 +77,18 @@ describe("copilot billing", () => {
     const billing = await fetchCopilotBilling({
       account,
       token: "test-token",
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            month: {
-              monthly_credits: "43.5",
-              grossAmount: { amount: "0.44", currency: "USD" },
-            },
-          }),
-          { status: 200 },
-        ),
+      fetchImpl: async (url) =>
+        String(url).endsWith("/premium_request/usage")
+          ? new Response("{}", { status: 404 })
+          : new Response(
+              JSON.stringify({
+                month: {
+                  monthly_credits: "43.5",
+                  grossAmount: { amount: "0.44", currency: "USD" },
+                },
+              }),
+              { status: 200 },
+            ),
     });
 
     expect(billing).toMatchObject({
@@ -94,6 +97,128 @@ describe("copilot billing", () => {
       state: "exact",
       monthlyCredits: 43.5,
       monthlySpendUsd: 0.44,
+      source: "official",
+    });
+  });
+
+  test("uses a configured organization billing owner on the current AI billing routes", async () => {
+    const prevOwner = process.env["COPILOTLINE_BILLING_OWNER"];
+    const prevOwnerType = process.env["COPILOTLINE_BILLING_OWNER_TYPE"];
+    const seenUrls: string[] = [];
+
+    try {
+      process.env["COPILOTLINE_BILLING_OWNER"] = "acme-inc";
+      process.env["COPILOTLINE_BILLING_OWNER_TYPE"] = "organization";
+
+      const billing = await fetchCopilotBilling({
+        account,
+        token: "test-token",
+        fetchImpl: async (url) => {
+          seenUrls.push(String(url));
+          if (String(url).endsWith("/premium_request/usage")) {
+            return new Response("{}", { status: 404 });
+          }
+          return new Response(
+            JSON.stringify({
+              usageItems: [
+                {
+                  product: "copilot_ai",
+                  sku: "copilot_ai_credit",
+                  netQuantity: 43.5,
+                  netAmount: { amount: 0.44, currency: "USD" },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        },
+      });
+
+      expect(seenUrls).toEqual([
+        "https://api.github.com/organizations/acme-inc/settings/billing/ai_credit/usage",
+        "https://api.github.com/organizations/acme-inc/settings/billing/premium_request/usage",
+      ]);
+      expect(billing).toMatchObject({
+        state: "exact",
+        label: "credits",
+        monthlyCredits: 43.5,
+        monthlySpendUsd: 0.44,
+      });
+    } finally {
+      if (prevOwner === undefined) {
+        delete process.env["COPILOTLINE_BILLING_OWNER"];
+      } else {
+        process.env["COPILOTLINE_BILLING_OWNER"] = prevOwner;
+      }
+      if (prevOwnerType === undefined) {
+        delete process.env["COPILOTLINE_BILLING_OWNER_TYPE"];
+      } else {
+        process.env["COPILOTLINE_BILLING_OWNER_TYPE"] = prevOwnerType;
+      }
+    }
+  });
+
+  test("sums spend across AI credit and premium-request reports but drops an ambiguous quantity", async () => {
+    const billing = await fetchCopilotBilling({
+      account,
+      token: "test-token",
+      fetchImpl: async (url) =>
+        String(url).endsWith("/ai_credit/usage")
+          ? new Response(
+              JSON.stringify({
+                usageItems: [
+                  {
+                    product: "copilot_ai",
+                    netQuantity: 43.5,
+                    netAmount: { amount: 0.44, currency: "USD" },
+                  },
+                ],
+              }),
+              { status: 200 },
+            )
+          : new Response(
+              JSON.stringify({
+                usageItems: [
+                  {
+                    product: "copilot_premium",
+                    netQuantity: 12,
+                    netAmount: { amount: 1.20, currency: "USD" },
+                  },
+                ],
+              }),
+              { status: 200 },
+            ),
+    });
+
+    expect(billing).toMatchObject({
+      state: "exact",
+      label: "spend",
+      monthlyCredits: null,
+      monthlySpendUsd: 1.64,
+      source: "official",
+    });
+  });
+
+  test("treats an empty successful month report as exact zero spend", async () => {
+    const billing = await fetchCopilotBilling({
+      account,
+      token: "test-token",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            timePeriod: { year: 2026, month: 6 },
+            organization: "acme-inc",
+            usageItems: [],
+          }),
+          { status: 200 },
+        ),
+    });
+
+    expect(billing).toMatchObject({
+      state: "exact",
+      label: "spend",
+      monthlyCredits: null,
+      monthlySpendUsd: 0,
       source: "official",
     });
   });
@@ -147,16 +272,18 @@ describe("copilot billing", () => {
         account,
         token: "test-token",
         now: () => fetchedAt,
-        fetchImpl: async () =>
-          new Response(
-            JSON.stringify({
-              month: {
-                monthlyCredits: 43.5,
-                monthlySpendUsd: 0.44,
-              },
-            }),
-            { status: 200 },
-          ),
+        fetchImpl: async (url) =>
+          String(url).endsWith("/premium_request/usage")
+            ? new Response("{}", { status: 404 })
+            : new Response(
+                JSON.stringify({
+                  month: {
+                    monthlyCredits: 43.5,
+                    monthlySpendUsd: 0.44,
+                  },
+                }),
+                { status: 200 },
+              ),
       });
 
       expect(billingForRender(account, () => fetchedAt + 10_000)).toMatchObject({

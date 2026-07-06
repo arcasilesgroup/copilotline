@@ -240,10 +240,36 @@ example:
 💸 work-account premium ●●●●○○○○ 62% 620/1k ⟳ Jun 1 00:00 │ credits 43.5 · $0.44 mo
 ```
 
-If the official billing API is enabled but does not return numeric totals for
-the active account, `copilotline` falls back to an honest capability-only state
-such as `credits on` instead of showing `0`. Per-session money spend and raw
-token pricing remain out of v1.
+If your Copilot seat is billed through an organization rather than your
+personal account, point billing at that owner with either config:
+
+```json
+{
+  "billing": {
+    "owner": "acme-inc",
+    "ownerType": "organization"
+  }
+}
+```
+
+or env vars:
+
+```bash
+export COPILOTLINE_BILLING_OWNER=acme-inc
+export COPILOTLINE_BILLING_OWNER_TYPE=organization
+```
+
+Organization billing can also require a token that is accepted for billing
+endpoints. If the default `gh auth token --user ...` path still degrades to
+`credits on`, authenticate `gh` with the billing-capable scopes for that org or
+provide a matching `COPILOTLINE_GITHUB_TOKEN`.
+
+If the official billing API is enabled but still does not return numeric totals
+for the configured owner, `copilotline` falls back to an honest capability-only
+state such as `credits on` instead of showing `0`. When GitHub returns spend
+but not a single coherent quantity, `copilotline` shows a spend-only reading
+such as `spend $1.64 mo`. Per-session money spend and raw token pricing remain
+out of v1.
 
 ### Multi-account behavior
 

@@ -92,4 +92,43 @@ describe("readCopilotlineConfig", () => {
       else process.env["COPILOTLINE_USAGE_UNITS"] = prev;
     }
   });
+
+  test("reads a billing owner from config and lets env override it", () => {
+    tmp = createTempDir();
+    const path = join(tmp, "config.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        billing: { owner: "acme-inc", ownerType: "organization" },
+      }),
+      "utf-8",
+    );
+
+    const prevOwner = process.env["COPILOTLINE_BILLING_OWNER"];
+    const prevOwnerType = process.env["COPILOTLINE_BILLING_OWNER_TYPE"];
+    try {
+      expect(readCopilotlineConfig(path).billing).toEqual({
+        owner: "acme-inc",
+        ownerType: "organization",
+      });
+
+      process.env["COPILOTLINE_BILLING_OWNER"] = "octocat";
+      process.env["COPILOTLINE_BILLING_OWNER_TYPE"] = "user";
+      expect(readCopilotlineConfig(path).billing).toEqual({
+        owner: "octocat",
+        ownerType: "user",
+      });
+    } finally {
+      if (prevOwner === undefined) {
+        delete process.env["COPILOTLINE_BILLING_OWNER"];
+      } else {
+        process.env["COPILOTLINE_BILLING_OWNER"] = prevOwner;
+      }
+      if (prevOwnerType === undefined) {
+        delete process.env["COPILOTLINE_BILLING_OWNER_TYPE"];
+      } else {
+        process.env["COPILOTLINE_BILLING_OWNER_TYPE"] = prevOwnerType;
+      }
+    }
+  });
 });

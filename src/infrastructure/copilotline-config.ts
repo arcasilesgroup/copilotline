@@ -13,10 +13,16 @@ import { asRecord } from "./value-reader.js";
 export type AccountMode = "auto" | "manual";
 
 export type UsageUnits = "credit" | "token" | "usd";
+export type BillingOwnerType = "user" | "organization";
 
 export interface UsageConfig {
   units: UsageUnits;
   showCost: boolean;
+}
+
+export interface BillingConfig {
+  owner: string | null;
+  ownerType: BillingOwnerType;
 }
 
 export interface CopilotlineConfig {
@@ -26,6 +32,7 @@ export interface CopilotlineConfig {
     host: string | null;
   };
   usage: UsageConfig;
+  billing: BillingConfig;
 }
 
 export function normalizeUsageUnits(value: unknown): UsageUnits | null {
@@ -38,6 +45,19 @@ export function normalizeUsageUnits(value: unknown): UsageUnits | null {
   }
   if (text === "usd" || text === "cost" || text === "dollars") {
     return "usd";
+  }
+  return null;
+}
+
+export function normalizeBillingOwnerType(
+  value: unknown,
+): BillingOwnerType | null {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (text === "user" || text === "personal") {
+    return "user";
+  }
+  if (text === "organization" || text === "org") {
+    return "organization";
   }
   return null;
 }
@@ -75,6 +95,7 @@ export function readCopilotlineConfig(
       host,
     },
     usage: resolveUsageConfig(asRecord(record?.["usage"])),
+    billing: resolveBillingConfig(asRecord(record?.["billing"])),
   };
 }
 
@@ -90,6 +111,20 @@ function resolveUsageConfig(
   const showCost =
     usage?.["showCost"] === true || usage?.["show_cost"] === true;
   return { units, showCost };
+}
+
+function resolveBillingConfig(
+  billing: Record<string, unknown> | undefined,
+): BillingConfig {
+  const owner =
+    readString(process.env["COPILOTLINE_BILLING_OWNER"]) ??
+    readString(billing?.["owner"]);
+  const ownerType =
+    normalizeBillingOwnerType(process.env["COPILOTLINE_BILLING_OWNER_TYPE"]) ??
+    normalizeBillingOwnerType(billing?.["ownerType"]) ??
+    normalizeBillingOwnerType(billing?.["owner_type"]) ??
+    "user";
+  return { owner, ownerType };
 }
 
 export function writeCopilotlineConfig(
@@ -119,6 +154,13 @@ export function defaultCopilotlineConfig(): CopilotlineConfig {
       units:
         normalizeUsageUnits(process.env["COPILOTLINE_USAGE_UNITS"]) ?? "credit",
       showCost: false,
+    },
+    billing: {
+      owner: readString(process.env["COPILOTLINE_BILLING_OWNER"]),
+      ownerType:
+        normalizeBillingOwnerType(
+          process.env["COPILOTLINE_BILLING_OWNER_TYPE"],
+        ) ?? "user",
     },
   };
 }

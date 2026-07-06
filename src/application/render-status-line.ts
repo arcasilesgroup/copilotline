@@ -864,11 +864,16 @@ function billingSegmentVariants(billing: StatusSnapshot["billing"]): Array<strin
     return [null];
   }
 
-  if (billing.state === "capability" || billing.monthlyCredits === null || billing.monthlySpendUsd === null) {
+  if (billing.state === "capability") {
     return [billingCapabilitySegment(billing), null];
   }
 
-  return [billingExactSegment(billing), billingCompactSegment(billing), billingCapabilitySegment(billing), null];
+  return [
+    billingExactSegment(billing),
+    billingCompactSegment(billing),
+    billingCapabilitySegment(billing),
+    null,
+  ];
 }
 
 function hasQuotaData(quota: StatusSnapshot["quota"]): boolean {
@@ -912,12 +917,46 @@ function agentSegment(agent: string): string {
   return `${style.dim}agent ${sanitizeText(agent)}${RESET}`;
 }
 
-function billingExactSegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
-  return `${palette.white}${sanitizeText(billing.label)}${RESET} ${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET} ${style.dim}·${RESET} ${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+function billingExactSegment(
+  billing: NonNullable<StatusSnapshot["billing"]>,
+): string | null {
+  const quantity =
+    billing.monthlyCredits === null
+      ? null
+      : `${palette.white}${sanitizeText(billing.label)}${RESET} ${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET}`;
+  const spend =
+    billing.monthlySpendUsd === null
+      ? null
+      : `${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+
+  if (quantity && spend) {
+    return `${quantity} ${style.dim}·${RESET} ${spend}`;
+  }
+  if (quantity) {
+    return quantity;
+  }
+  if (spend) {
+    return `${palette.white}${sanitizeText(billing.label)}${RESET} ${spend}`;
+  }
+  return null;
 }
 
-function billingCompactSegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
-  return `${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET} ${style.dim}·${RESET} ${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+function billingCompactSegment(
+  billing: NonNullable<StatusSnapshot["billing"]>,
+): string | null {
+  const quantity =
+    billing.monthlyCredits === null
+      ? null
+      : `${palette.white}${formatBillingCredits(billing.monthlyCredits)}${RESET}`;
+  const spend =
+    billing.monthlySpendUsd === null
+      ? null
+      : `${palette.green}${formatUsd(billing.monthlySpendUsd)}${RESET} ${style.dim}mo${RESET}`;
+
+  if (quantity && spend) {
+    return `${quantity} ${style.dim}·${RESET} ${spend}`;
+  }
+  return spend;
 }
 
 function billingCapabilitySegment(billing: NonNullable<StatusSnapshot["billing"]>): string {
